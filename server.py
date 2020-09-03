@@ -8,6 +8,7 @@ import multiprocessing
 import ismrmrd.xsd
 
 import simplefft
+import simplefft_bart
 import invertcontrast
 import analyzeflow
 
@@ -77,6 +78,9 @@ class Server:
             if (config == "simplefft"):
                 logging.info("Starting simplefft processing based on config")
                 simplefft.process(connection, config, metadata)
+            if (config == "simplefft_bart"):
+                logging.info("Starting simplefft_bart processing based on config")
+                simplefft_bart.process(connection, config, metadata)
             elif (config == "invertcontrast"):
                 logging.info("Starting invertcontrast processing based on config")
                 invertcontrast.process(connection, config, metadata)
