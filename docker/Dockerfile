@@ -90,5 +90,4 @@ RUN  rm -r /root/.cache/pip
 
 # CMD [ "/usr/local/bin/python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
 
-CMD [ "export", "PYTHONPATH=${PYTHONPATH}:/opt/code/bart/python"]
 CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
