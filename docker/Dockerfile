@@ -6,9 +6,8 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt-get update --quiet \
     && apt-get install --no-install-recommends --no-install-suggests --yes \
-       apt-transport-https ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev 
+       ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev 
 
-RUN update-ca-certificates
 
 RUN  mkdir -p /opt/code
 
@@ -30,7 +29,7 @@ RUN cd /opt/code \
     && cd build \
     && cmake .. \
     && make -j $(nproc) \
-    &&  make install
+    && make install
 
 
 # compile & install the bart MRI toolbox
@@ -60,10 +59,8 @@ RUN  ln -s libismrmrd.so.1.4 libismrmrd.so
 RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
-        apt-transport-https ca-certificates python3 python3-pip h5utils libxslt1.1 git gcc libfftw3-3 liblapacke\
+        ca-certificates python3 python3-pip h5utils libxslt1.1 git gcc libfftw3-3 liblapacke nano vim\
      && pip3 install --no-cache-dir pyxb h5py
-
-RUN  update-ca-certificates
 
 RUN  mkdir -p /opt/code
 
@@ -92,4 +89,6 @@ RUN  apt-get autoclean --yes
 RUN  rm -r /root/.cache/pip
 
 # CMD [ "/usr/local/bin/python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
+
+CMD [ "export", "PYTHONPATH=${PYTHONPATH}:/opt/code/bart/python"]
 CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
