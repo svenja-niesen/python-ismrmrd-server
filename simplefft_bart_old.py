@@ -42,8 +42,19 @@ def process(connection, config, metadata):
     logging.info("Config: \n%s", config)
     logging.info("Metadata: \n%s", metadata)
 
+    cal_data = []
+
     # Discard phase correction lines and accumulate lines until "ACQ_LAST_IN_SLICE" is set
-    for group in conditionalGroups(connection, lambda acq: not acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA), lambda acq: acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE)):
+    for key, group in enumerate(conditionalGroups(connection, lambda acq: not acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA), lambda acq: acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE))):
+        cal_data.append([acq.data for acq in group if acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)])
+
+        logging.debug('enc step: %d, %d'%(group[0].idx.kspace_encode_step_1, group[0].idx.kspace_encode_step_1))
+        # group = [acq for acq in group if not acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)]
+        # assume that we now have enough calibration data
+        logging.debug('groupkey = %d, len(cal_data) = %d, len(cal_data[0]) = %d'%(key, len(cal_data), len(cal_data[0])))
+        # logging.debug('len(cal_data) = %d, len(cal_data[0]) = %d, cal_data[0][0].shape = %d'%(len(cal_data), len(cal_data[0]), cal_data[0][0].shape))
+        # sens = bart(1, 'ecalib -m 1 -I ', ksp)  # ESPIRiT calibration
+        #reco = bart(1, 'pics', und2x2, sens)
         image = process_group(group, config, metadata)
 
         logging.debug("Sending image to client:\n%s", image)
@@ -67,13 +78,26 @@ def process_group(group, config, metadata):
     # data = fft.fftshift(data, axes=(1, 2))
     # data = fft.ifft2(data)
     # data = fft.ifftshift(data, axes=(1, 2))
-    data = bart(1, 'fft -i 6', data)
+
+    data = np.moveaxis(data, 0, -1)[:,:,np.newaxis,:]
+    sens = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
+
+    data[:,1::2] = 0
+    data[::4,:] = 0
+    data[1::4,:] = 0
+
+    data = bart(1, 'pics', data, sens)
+    
+    logging.debug("pics size %s" % (data.shape,))
+
+    # data = bart(1, 'fft -i 6', data)
+    
 
     # Sum of squares coil combination
     data = np.abs(data)
-    data = np.square(data)
-    data = np.sum(data, axis=0)
-    data = np.sqrt(data)
+    # data = np.square(data)
+    # data = np.sum(data, axis=0)
+    # data = np.sqrt(data)
 
     logging.debug("Image data is size %s" % (data.shape,))
     np.save(debugFolder + "/" + "img.npy", data)
@@ -104,5 +128,6 @@ def process_group(group, config, metadata):
 
     image.attribute_string = xml
     return image
+
 
 

@@ -6,7 +6,7 @@
 cp -R -f /tmp/share/code/* "/opt/code/python-ismrmrd-server/"
 
 # set pythonpath for bart (docker's ENV or export in /root/.bashrc do not seem to work)
-export PYTHONPATH=${PYTHONPATH}:/opt/code/bart/python
+export PYTHONPATH=${PYTHONPATH}:/opt/code/pythonpath
 
 if [ $# -eq 1 ]; then
   LOG_FILE=${1}
