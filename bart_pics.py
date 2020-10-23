@@ -279,7 +279,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     np.save(debugFolder + "/" + "img.npy", data)
 
     # Normalize and convert to int16
-    data *= 32767/data.max()
+    # save one scaling in 'static' variable
+    try:
+        process_raw.imascale
+    except:
+        process_raw.imascale = 0.8 / data.max()
+    data *= 32767 * process_raw.imascale
     data = np.around(data)
     data = data.astype(np.int16)
 

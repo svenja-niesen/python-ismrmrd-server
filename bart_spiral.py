@@ -179,7 +179,6 @@ def process(connection, config, metadata):
 def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
     # initialize k-space
     nc = metadata.acquisitionSystemInformation.receiverChannels
-    nx = group[0].number_of_samples
 
     enc1_min, enc1_max = int(999), int(0)
     enc2_min, enc2_max = int(999), int(0)
@@ -195,8 +194,9 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
         if enc2 > enc2_max:
             enc2_max = enc2
 
-    nx = metadata.encoding[0].encodedSpace.matrixSize.x
-    ny = metadata.encoding[0].encodedSpace.matrixSize.y
+    nx = 2 * metadata.encoding[0].encodedSpace.matrixSize.x
+    ny = metadata.encoding[0].encodedSpace.matrixSize.x
+    # ny = metadata.encoding[0].encodedSpace.matrixSize.y
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
 
     kspace = np.zeros([ny, nz, nc, nx], dtype=group[0].data.dtype)
@@ -225,10 +225,10 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
             enc1 += cy - cenc1
             enc2 += cz - cenc2
         
-        if dmtx is None:
-            kspace[enc1, enc2, :, col] += acq.data
-        else:
-            kspace[enc1, enc2, :, col] += apply_prewhitening(acq.data, dmtx)
+        # if dmtx is None:
+        kspace[enc1, enc2, :, col] += acq.data
+        # else:
+            # kspace[enc1, enc2, :, col] += apply_prewhitening(acq.data, dmtx)
         counter[enc1, enc2] += 1
 
     # support averaging (with or without acquisition weighting)
@@ -240,10 +240,115 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
     return kspace
 
 
+def rot_trj(trj, n_intl, rot=2*np.pi):
+    # rotate spiral gradient
+    # trj is a 2D trajectory or gradient arrays ([2, n_samples]), n_intlv is the number of spiral interleaves
+    # returns a new trajectory/gradient array with size [n_intl, 2, n_samples]
+    phi = np.linspace(0, rot, n_intl, endpoint=False)
+
+    rot_mat = np.asarray([[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]])
+    rot_mat = np.moveaxis(rot_mat,-1,0)
+
+    return rot_mat @ trj
+
+
+def intp_axis(newgrid, oldgrid, data, axis=0):
+    # interpolation along an axis (shape of newgrid, oldgrid and data see np.interp)
+    temp = np.moveaxis(data.copy(), axis, 0)
+    newshape = [len(newgrid)] + list(temp.shape[1:])
+    temp = temp.reshape((temp.shape[0], -1))
+    intp_data = np.zeros((len(newgrid), temp.shape[-1]), dtype=data.dtype)
+    for k in range(temp.shape[-1]):
+        intp_data[:, k] = np.interp(newgrid, oldgrid, temp[:, k])
+    intp_data = intp_data.reshape(newshape)
+    intp_data = np.moveaxis(intp_data, 0, axis)
+    return intp_data
+
+
+def sort_spiral_data(group, metadata, dmtx=None):
+
+    # spiral_af = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
+    ncol = group[0].number_of_samples
+    nz = metadata.encoding[0].encodedSpace.matrixSize.z    
+    spiralType = int(metadata.encoding[0].trajectoryDescription.userParameterLong[1].value_)
+    nitlv = int(metadata.encoding[0].trajectoryDescription.userParameterLong[0].value_)
+    fov = metadata.encoding[0].reconSpace.fieldOfView_mm.x
+    res = fov/metadata.encoding[0].encodedSpace.matrixSize.x
+    max_amp = metadata.encoding[0].trajectoryDescription.userParameterDouble[0].value_
+    min_rise = metadata.encoding[0].trajectoryDescription.userParameterDouble[1].value_
+    dwelltime = 1e-6 * metadata.encoding[0].trajectoryDescription.userParameterDouble[2].value_  # s
+    dt_grad = 10e-6
+    gammabar = 42.577e6
+
+    logging.debug("spiralType = %s, nitlv = %s, fov = %s, res = %s, max_amp = %s, min_rise = %s, " % (spiralType, nitlv, fov, res, max_amp, min_rise))
+
+    grad = spiraltraj.calc_traj(nitlv=nitlv, res=res, fov=fov, max_amp=max_amp, min_rise=min_rise, spiraltype=spiralType)
+    grad = np.asarray(grad).T # -> [2, nsamples]
+    # add zeros around gradient
+    grad = np.concatenate((np.zeros([2,1]), grad, np.zeros([2,1])), axis=-1)
+
+    deph_mom = 0.
+    if spiralType > 2:
+        deph_ru = metadata.encoding[0].trajectoryDescription.userParameterLong[2].value_  # us
+        deph_ft = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # us
+        deph_amp = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # int_32
+        deph_amp = np.frombuffer(np.uint32(deph_amp), 'float32')[0]
+        deph_mom = deph_amp * (deph_ft + deph_ru)
+
+    # first calculate trajectory from gradient (with proper scaling for bart)
+    base_trj = 1e-3 * dt_grad * (deph_mom + np.cumsum(grad, axis=-1))
+    base_trj *= gammabar * (1e-3 * fov)
+    
+    # then interpolate to adc resolution
+    gradtime = dt_grad * np.arange(base_trj.shape[-1])
+    gradtime -= dt_grad # account for zero-fill
+
+    graddelay = -3e-6
+    adctime = dwelltime * np.arange(0.5, ncol) + graddelay
+
+    np.save(debugFolder + "/" + "gradtime.npy", gradtime)
+    np.save(debugFolder + "/" + "adctime.npy", adctime)
+
+    np.save(debugFolder + "/" + "base_trj_pre.npy", base_trj)
+    base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1)
+    np.save(debugFolder + "/" + "base_trj_post.npy", base_trj)
+
+    # and finally rotate for each interleave
+    base_trj = rot_trj(base_trj, nitlv)
+
+    sig = list()
+    trj = list()
+    for acq in group:
+        enc1 = acq.idx.kspace_encode_step_1
+        enc2 = acq.idx.kspace_encode_step_2
+        kz = enc2 - nz//2
+
+        # append 3D trajectory
+        tmp = base_trj[enc1]
+        tmp = np.concatenate((tmp, kz * np.ones(tmp.shape[-1])[np.newaxis])) 
+        trj.append(tmp)
+    
+        # and append data after optional prewhitening
+        if dmtx is None:
+            sig.append(acq.data)
+        else:
+            sig.append(apply_prewhitening(acq.data, dmtx))
+
+    # convert lists to numpy arrays
+    trj = np.asarray(trj) # current size: (nacq, 3, ncol)
+    sig = np.asarray(sig) # current size: (nacq, ncha, ncol)
+
+    # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
+    trj = np.transpose(trj, [1, 2, 0])
+    sig = np.transpose(sig[np.newaxis], [0, 3, 1, 2])
+    logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
+
+    return sig, trj
+
+
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
-
         sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
@@ -254,57 +359,44 @@ def process_acs(group, config, metadata, dmtx=None):
 
 def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
-    data = sort_into_kspace(group, metadata, dmtx)
+    nx = metadata.encoding[0].encodedSpace.matrixSize.x
+    ny = metadata.encoding[0].encodedSpace.matrixSize.y
+    nz = metadata.encoding[0].encodedSpace.matrixSize.z
+
+    data, trj = sort_spiral_data(group, metadata, dmtx)
 
     logging.debug("Raw data is size %s" % (data.shape,))
+    logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
-    # spiral_af = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
-
-    # max_amp = np.frombuffer(np.int32(1109917696), 'float32')[0]
-    # min_rise = np.frombuffer(np.int32(1085975211), 'float32')[0]
-    # spiraltype = int(3)
-    nitlv = int(metadata.encoding[0].trajectoryDescription.userParameterLong[0].value_)
-    fov = metadata.encoding[0].reconSpace.fieldOfView_mm.x
-    res = fov/metadata.encoding[0].encodedSpace.matrixSize.x
-    max_amp = metadata.encoding[0].trajectoryDescription.userParameterDouble[0].value_
-    min_rise = metadata.encoding[0].trajectoryDescription.userParameterDouble[1].value_
-    spiralType = int(metadata.encoding[0].trajectoryDescription.userParameterLong[1].value_)
-    trj = spiraltraj.calc_traj(nitlv=nitlv, res=res, fov=fov, max_amp=max_amp, min_rise=min_rise, spiraltype=spiralType)
-    trj = np.asarray(trj)
-
-    deph_ru = metadata.encoding[0].trajectoryDescription.userParameterLong[2].value_  # us
-    deph_ft = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # us
-
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
-        # Fourier Transform
-        data = fft.fftshift(data, axes=(0, 1, 2))
-        data = fft.ifftn(data, axes=(0, 1, 2))
-        data = fft.ifftshift(data, axes=(0, 1, 2))
+        
+        # bart nufft with nominal trajectory
+        data = bart(1, 'nufft -i -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        # data = bart(1, 'nufft -i -t', trj, data) # nufft
 
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
-        data = bart(1, 'pics -r0.01', data, sensmaps)
+        data = bart(1, 'pics -S -e -l1 -r 0.0001 -i 25 -t', trj, data, sensmaps)
         data = np.abs(data)
 
     logging.debug("Image data is size %s" % (data.shape,))
     np.save(debugFolder + "/" + "img.npy", data)
 
     # Normalize and convert to int16
-    data *= 32767/data.max()
+    # save one scaling in 'static' variable
+    try:
+        process_raw.imascale
+    except:
+        process_raw.imascale = 0.8 / data.max()
+    data *= 32767 * process_raw.imascale
     data = np.around(data)
     data = data.astype(np.int16)
-
-    # Remove readout oversampling
-    nRO = np.size(data,0)
-    data = data[int(nRO/4):int(nRO*3/4),:]
-    logging.debug("Image without oversampling is size %s" % (data.shape,))
-    np.save(debugFolder + "/" + "imgCrop.npy", data)
 
     # Format as ISMRMRD image data
     image = ismrmrd.Image.from_array(data, acquisition=group[0])

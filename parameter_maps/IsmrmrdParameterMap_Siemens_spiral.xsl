@@ -197,7 +197,8 @@
 
                 <xsl:if test="siemens/MEAS/sKSpace/ucTrajectory = 4">
                     <trajectoryDescription>
-                        <identifier>HargreavesVDS2000</identifier>
+                        <!-- <identifier>HargreavesVDS2000</identifier> -->
+                        <identifier>EhsesSpiral2020</identifier>
                         <userParameterLong>
                             <name>interleaves</name>
                             <value>
@@ -213,23 +214,35 @@
                             </value>
                         </userParameterLong>
                         <userParameterLong>
-                            <name>dephRampUp</name>
+                            <name>flipPerFrame</name>
                             <value>
                                 <xsl:value-of select="siemens/MEAS/aulServicePara[2]" />
                             </value>
                         </userParameterLong>
                         <userParameterLong>
-                            <name>dephFlatTop</name>
+                            <name>dephRampUp</name>
                             <value>
                                 <xsl:value-of select="siemens/MEAS/aulServicePara[3]" />
                             </value>
                         </userParameterLong>
                         <userParameterLong>
+                            <name>dephFlatTop</name>
+                            <value>
+                                <xsl:value-of select="siemens/MEAS/aulServicePara[4]" />
+                            </value>
+                        </userParameterLong>
+                        <userParameterLong>
+                            <name>dephAmpl_reinterpret_cast_to_int32</name>
+                            <value>
+                                <xsl:value-of select="siemens/MEAS/aulServicePara[5]" />
+                            </value>
+                        </userParameterLong>
+                        <!-- <userParameterLong>
                             <name>SamplingTime_ns</name>
                             <value>
                                 <xsl:value-of select="siemens/MEAS/sWipMemBlock/alFree[57]" />
                             </value>
-                        </userParameterLong>
+                        </userParameterLong> -->
                         <userParameterDouble>
                             <!-- <name>MaxGradient_G_per_cm</name>
                             <value>
@@ -251,6 +264,12 @@
                             </value>
                         </userParameterDouble>
                         <userParameterDouble>
+                            <name>dwellTime_us</name>
+                            <value>
+                                <xsl:value-of select="siemens/MEAS/sRXSPEC/alDwellTime div 1000.0"/>
+                            </value>
+                        </userParameterDouble>
+                        <!-- <userParameterDouble>
                             <name>FOVCoeff_1_cm</name>
                             <value>
                                 <xsl:value-of select="siemens/MEAS/sWipMemBlock/adFree[10]" />
@@ -261,8 +280,9 @@
                             <value>
                                 <xsl:value-of select="siemens/MEAS/sWipMemBlock/adFree[9]" />
                             </value>
-                        </userParameterDouble>
-                        <comment>Using spiral design by Brian Hargreaves (http://mrsrl.stanford.edu/~brian/vdspiral/)</comment>
+                        </userParameterDouble> -->
+                        <!-- <comment>Using spiral design by Brian Hargreaves (http://mrsrl.stanford.edu/~brian/vdspiral/)</comment> -->
+                        <comment>Using spiral design by Philipp Ehses; based on code by Miki Lustig and Brian Hargreaves</comment>
                     </trajectoryDescription>
                 </xsl:if>
 
