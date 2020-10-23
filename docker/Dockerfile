@@ -141,7 +141,9 @@ RUN  apt-get autoremove --yes
 RUN  apt-get autoclean --yes
 RUN  rm -r /root/.cache/pip
 
-# CMD [ "/usr/local/bin/python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
+# add ismrmrd server start script
+RUN echo "/opt/code/python-ismrmrd-server/main.py -v -H=0.0.0.0 -p=9002 -l=/tmp/share/debug/python-ismrmrd-server.log" > /usr/bin/start_server
+RUN chmod +x /usr/bin/start_server
 
-# CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
-CMD ["/bin/bash", "/opt/code/python-ismrmrd-server/start-fire-python-server.sh", "/tmp/python-ismrmrd-server.log"]
+
+CMD ["/usr/bin/start_server"]

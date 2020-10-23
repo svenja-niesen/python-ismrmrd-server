@@ -299,9 +299,9 @@ def sort_spiral_data(group, metadata, dmtx=None):
 
     deph_mom = 0.
     if spiralType > 2:
-        deph_ru = metadata.encoding[0].trajectoryDescription.userParameterLong[2].value_  # us
-        deph_ft = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # us
-        deph_amp = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # int_32
+        deph_ru = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # us
+        deph_ft = metadata.encoding[0].trajectoryDescription.userParameterLong[4].value_  # us
+        deph_amp = metadata.encoding[0].trajectoryDescription.userParameterLong[5].value_  # int_32
         deph_amp = np.frombuffer(np.uint32(deph_amp), 'float32')[0]
         deph_mom = deph_amp * (deph_ft + deph_ru)
 
