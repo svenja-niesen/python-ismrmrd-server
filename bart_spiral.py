@@ -32,6 +32,16 @@ def calculate_prewhitening(noise, scale_factor=1.0):
     return dmtx
 
 
+def remove_os(data, axis=0):
+    '''Remove oversampling (assumes os factor 2)
+    '''
+    cut = slice(data.shape[axis]//4, (data.shape[axis]*3)//4)
+    data = np.fft.ifft(data, axis=axis)
+    data = np.delete(data, cut, axis=axis)
+    data = np.fft.fft(data, axis=axis)
+    return data
+
+
 def apply_prewhitening(data,dmtx):
     '''Apply the noise prewhitening matrix
 
@@ -303,7 +313,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     gradtime = dt_grad * np.arange(base_trj.shape[-1])
     gradtime -= dt_grad # account for zero-fill
 
-    graddelay = -3e-6
+    graddelay = 0e-6
     adctime = dwelltime * np.arange(0.5, ncol) + graddelay
 
     np.save(debugFolder + "/" + "gradtime.npy", gradtime)
@@ -349,6 +359,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
+        data = remove_os(data)
         sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
