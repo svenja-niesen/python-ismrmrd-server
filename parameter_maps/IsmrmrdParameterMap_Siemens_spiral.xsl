@@ -232,7 +232,7 @@
                             </value>
                         </userParameterLong>
                         <userParameterLong>
-                            <name>dephAmpl_reinterpret_cast_to_int32</name>
+                            <name>fSpiralOS_reinterpret_cast_to_int32</name>
                             <value>
                                 <xsl:value-of select="siemens/MEAS/aulServicePara[5]" />
                             </value>
