@@ -401,9 +401,6 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         grad_totaltime = dt_grad * (grad.shape[-1]-2)
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
-    
-    # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
-    grad[0], grad[1] = grad[1], grad[0]
 
     # and finally rotate for each interleave
     if spiralType == 3:
@@ -414,6 +411,10 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     # add z-dir:
     grad =  np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
     
+
+    # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
+    grad = grad[:, [1,0,2], :]
+
     ##############################
     ## girf trajectory prediction:
     ##############################
@@ -422,7 +423,6 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     girf = np.load(filepath + "/girf/girf_10us.npy")
 
     # rotation to phys coord system
-    print('grad.shape = %s, rot_mat.shape = %s'%(grad.shape, rot_mat.shape))
     pred_grad = dcs_to_gcs(grad, rot_mat)
 
     # gradient prediction
@@ -466,10 +466,12 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     np.save(debugFolder + "/" + "pred_trj.npy", pred_trj)
 
     # now we can switch x and y dir for correct orientation in FIRE
-    pred_trj[:,0], pred_trj[:,1] = pred_trj[:,1], pred_trj[:,0]
+    pred_trj = pred_trj[:,[1,0,2],:]
+    base_trj = base_trj[:,[1,0,2],:]
 
-    ## WIP
-    return base_trj #pred_trj
+    ## WIP  
+    return base_trj
+    # return pred_trj
 
 
 def sort_spiral_data(group, metadata, dmtx=None):
