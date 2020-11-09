@@ -359,6 +359,9 @@ def grad_pred(grad, girf):
 
     # remove k0 from girf:
     girf = girf.copy()[:,1:]
+    
+    # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
+    girf = girf[:,[1,0,2]]
 
     # zero-fill grad to number of girf samples (add check?)
     grad = np.concatenate([grad.copy(), np.zeros([grad.shape[0], ndim, girf_sampl-grad_sampl])], axis=-1)
@@ -368,17 +371,17 @@ def grad_pred(grad, girf):
     print('girf.shape =%s, grad.shape = %s'%(girf.shape, grad.shape))
 
     # apply girf to nominal gradients
-    grad_pred = np.zeros_like(grad)
+    pred_grad = np.zeros_like(grad)
     for dim in range(ndim):
-        grad_pred[:,dim]=np.sum(grad*girf[np.newaxis,:ndim,dim,:], axis=1)
+        pred_grad[:,dim]=np.sum(grad*girf[np.newaxis,:ndim,dim,:], axis=1)
 
     # IFFT
-    grad_pred = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(grad_pred, axes=-1), axis=-1), axes=-1)
+    pred_grad = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(pred_grad, axes=-1), axis=-1), axes=-1)
     
     # cut out relevant part
-    grad_pred = grad_pred[:,:,:grad_sampl]
+    # pred_grad = pred_grad[:,:,:grad_sampl]
 
-    return grad_pred
+    return pred_grad
 
 
 def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_rise, spiralType):
@@ -432,6 +435,12 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     pred_grad = gcs_to_dcs(pred_grad, rot_mat)
     pred_grad[:, 2] = 0. # set z-gradient to zero, otherwise bart reco crashes
 
+    # time vectors for interpolation
+    gradtime = dt_grad * np.arange(grad.shape[-1])
+    gradtime -= dt_grad # account for zero-fill
+    adctime = dwelltime * np.arange(0.5, ncol) + adc_shift
+    adctime_girf = adctime - (dt_grad-dt_skope)/2 # subtract dt_grad/2 for 10us GIRF
+
     # calculate k-space trajectory
     pred_trj =  np.cumsum(pred_grad.real, axis=-1)
     if spiralType > 2:
@@ -442,13 +451,11 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     # proper scaling for bart
     pred_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
 
-    # interpolate trajectory to scanner dwelltime
-    gradtime = dt_grad * np.arange(grad.shape[-1])
-    gradtime -= dt_grad # account for zero-fill
-    adctime = dwelltime * np.arange(0.5, ncol) + adc_shift    
-    adctime_girf = adctime - (dt_grad-dt_skope)/2 # subtract dt_grad/2 for 10us GIRF
+    gradtime_pred = dt_grad * np.arange(pred_trj.shape[-1])
+    gradtime_pred -= dt_grad # account for zero-fill
 
-    pred_trj = intp_axis(adctime_girf, gradtime, pred_trj, axis=-1)
+    # interpolate trajectory to scanner dwelltime
+    pred_trj = intp_axis(adctime_girf, gradtime_pred, pred_trj, axis=-1)
 
     # calculate base trajectory from gradient (with proper scaling for bart)
     base_trj =  np.cumsum(grad.real, axis=-1)
@@ -457,6 +464,7 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         base_trj -= np.sum(grad, axis=-1)[:,:,np.newaxis]/2.
     # proper scaling for bart
     base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
+    # interpolate trajectory to scanner dwelltime
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1)
 
     np.save(debugFolder + "/" + "gradtime.npy", gradtime)
@@ -470,8 +478,8 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     base_trj = base_trj[:,[1,0,2],:]
 
     ## WIP  
-    return base_trj
-    # return pred_trj
+    # return base_trj
+    return pred_trj
 
 
 def sort_spiral_data(group, metadata, dmtx=None):
