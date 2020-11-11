@@ -41,8 +41,7 @@ def calculate_prewhitening(noise, scale_factor=1.0):
     # R = sqrtm(np.linalg.inv(R))
     R = np.linalg.cholesky(np.linalg.inv(R))
 
-    # return R
-    return None # still untested and potentially buggy
+    return R
 
 
 def remove_os(data, axis=0):
@@ -121,14 +120,14 @@ def process(connection, config, metadata):
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
                     noiseGroup.append(item)
                     continue
-                elif len(noiseGroup) > 0 and dmtx is None:
-                    noise_data = []
-                    for acq in noiseGroup:
-                        noise_data.append(acq.data)
-                    noise_data = np.concatenate(noise_data, axis=1)
-                    # calculate pre-whitening matrix
-                    dmtx = calculate_prewhitening(noise_data)
-                    del(noise_data)
+                # elif len(noiseGroup) > 0 and dmtx is None:
+                #     noise_data = []
+                #     for acq in noiseGroup:
+                #         noise_data.append(acq.data)
+                #     noise_data = np.concatenate(noise_data, axis=1)
+                #     # calculate pre-whitening matrix
+                #     dmtx = calculate_prewhitening(noise_data)
+                #     del(noise_data)
                 
                 
                 # Accumulate all imaging readouts in a group
@@ -360,8 +359,9 @@ def grad_pred(grad, girf):
     # remove k0 from girf:
     girf = girf.copy()[:,1:]
     
-    # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
-    girf = girf[:,[1,0,2]]
+    # # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
+    # girf = girf[[1,0,2], :, :]
+    # girf = girf[:,[1,0,2], :]
 
     # zero-fill grad to number of girf samples (add check?)
     grad = np.concatenate([grad.copy(), np.zeros([grad.shape[0], ndim, girf_sampl-grad_sampl])], axis=-1)
@@ -393,6 +393,7 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
 
     grad = spiraltraj.calc_traj(nitlv=nitlv, res=res, fov=fov, max_amp=max_amp, min_rise=min_rise, spiraltype=spiralType)
     grad = np.asarray(grad).T # -> [2, nsamples]
+
     # add zeros around gradient
     grad = np.concatenate((np.zeros([2,1]), grad, np.zeros([2,1])), axis=-1)
 
@@ -405,18 +406,21 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
 
+    # switch x and y for old rot function
+    grad[[0,1]] = grad[[1,0]]
+
     # and finally rotate for each interleave
     if spiralType == 3:
         grad = rot(grad, nitlv, np.pi)
     else:
         grad = rot(grad, nitlv)
 
-    # add z-dir:
-    grad =  np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
-    
+    # switch x and y back from old rot function
+    grad[:,[0,1]] = grad[:,[1,0]]
 
-    # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
-    grad = grad[:, [1,0,2], :]
+    # add z-dir:
+    grad = np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
+
 
     ##############################
     ## girf trajectory prediction:
@@ -434,6 +438,8 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     # rotate back to logical system
     pred_grad = gcs_to_dcs(pred_grad, rot_mat)
     pred_grad[:, 2] = 0. # set z-gradient to zero, otherwise bart reco crashes
+    
+    logging.debug("allclose of gcs_to_dcs(dcs_to_gcs)? = %s"%(np.allclose(grad, gcs_to_dcs(dcs_to_gcs(grad, rot_mat), rot_mat)),))
 
     # time vectors for interpolation
     gradtime = dt_grad * np.arange(grad.shape[-1])
@@ -587,6 +593,9 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     else:
         data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
         data = np.abs(data)
+        # make sure that data is at least 3d:
+        while np.ndim(data) < 3:
+            data = data[..., np.newaxis]
     
     if nz > rNz:
         # remove oversampling in slice direction
@@ -611,7 +620,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
                          'WindowCenter':           '16384',
                          'WindowWidth':            '32768'})
     xml = meta.serialize()
-
+    
     images = []
     n_par = data.shape[-1]
     for par in range(n_par):

@@ -9,6 +9,7 @@ RUN apt-get update --quiet \
     && apt-get install --no-install-recommends --no-install-suggests --yes \
        wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev 
 
+
 # install mkl
 COPY ./mkl.sh /tmp/
 RUN /tmp/mkl.sh
@@ -18,6 +19,16 @@ RUN  mkdir -p /opt/code
 
 RUN  cd /opt/code \
      && git clone -b bart https://github.com/pehses/python-ismrmrd-server.git
+
+
+# install spiraltraj for trajectory calculation
+COPY spiraltraj /opt/code/spiraltraj
+RUN  cd /opt/code \
+     && cd spiraltraj \
+     && pip3 wheel .
+     # && git clone https://github.com/mrphysics-bonn/spiral-pypulseq-example \
+     # && mv spiral-pypulseq-example/spiraltraj . \
+
 
 # ISMRMRD library
 RUN cd /opt/code \
@@ -55,16 +66,7 @@ RUN  cd /opt/code \
      # && echo ENABLE_MEM_CFL=1 >> Makefile.local \
      # && echo ISMRMRD=1 > Makefile.local \
      # && export ISMRMRD_HOME=/usr/local \
-
-
-# install spiraltraj for trajectory calculation
-RUN  cd /opt/code \
-     && git clone https://github.com/mrphysics-bonn/spiral-pypulseq-example \
-     && mv spiral-pypulseq-example/spiraltraj . \
-     && cd spiraltraj \
-     && pip3 wheel .
-    # && git clone git@gitlab.dzne.de:ag-stoecker/python-tools/spiraltraj.git \
-    
+       
 
 # RUN  cd /opt/code \
 #      && git clone https://github.com/mrfil/PowerGrid.git \
