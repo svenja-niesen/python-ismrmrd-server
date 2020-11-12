@@ -445,7 +445,9 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     gradtime = dt_grad * np.arange(grad.shape[-1])
     gradtime -= dt_grad # account for zero-fill
     adctime = dwelltime * np.arange(0.5, ncol) + adc_shift
-    adctime_girf = adctime - (dt_grad-dt_skope)/2 # subtract dt_grad/2 for 10us GIRF
+
+    # zero-fill pred_grad again (for proper cumsum)
+    pred_grad = np.concatenate((np.zeros([pred_grad.shape[0], 3, 1]), grad), axis=-1)
 
     # calculate k-space trajectory
     pred_trj =  np.cumsum(pred_grad.real, axis=-1)
@@ -457,8 +459,11 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     # proper scaling for bart
     pred_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
 
+    adctime_girf = adctime - (dt_grad-dt_skope)/2 # subtract dt_grad/2 for 10us GIRF
     gradtime_pred = dt_grad * np.arange(pred_trj.shape[-1])
-    gradtime_pred -= dt_grad # account for zero-fill
+    gradtime_pred -= 2*dt_grad # account for two zero-fills
+
+    np.save(debugFolder + "/" + "pred_trj_pre.npy", pred_trj)
 
     # interpolate trajectory to scanner dwelltime
     pred_trj = intp_axis(adctime_girf, gradtime_pred, pred_trj, axis=-1)
@@ -470,6 +475,9 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         base_trj -= np.sum(grad, axis=-1)[:,:,np.newaxis]/2.
     # proper scaling for bart
     base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
+    
+    np.save(debugFolder + "/" + "base_trj_pre.npy", base_trj)
+
     # interpolate trajectory to scanner dwelltime
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1)
 
