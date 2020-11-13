@@ -27,21 +27,21 @@ def calculate_prewhitening(noise, scale_factor=1.0):
 
     noise = noise.reshape((noise.shape[0], noise.size//noise.shape[0]))
     
-    # M = float(noise.shape[1])
-    # dmtx = (1/(M-1))*np.asmatrix(noise)*np.asmatrix(noise).H
-    # dmtx = np.linalg.inv(np.linalg.cholesky(dmtx))
-    # dmtx = dmtx*np.sqrt(2)*np.sqrt(scale_factor)
+    M = float(noise.shape[1])
+    dmtx = (1/(M-1))*np.asmatrix(noise)*np.asmatrix(noise).H
+    dmtx = np.linalg.inv(np.linalg.cholesky(dmtx))
+    dmtx = dmtx*np.sqrt(2)*np.sqrt(scale_factor)
     
     # channel-wise scaling correct? (conjugate) transpose ok?
-    # return dmtx
+    return dmtx
 
-    R = np.cov(noise)
-    R /= np.mean(abs(np.diag(R)))
-    R[np.diag_indices_from(R)] = abs(R[np.diag_indices_from(R)])
-    # R = sqrtm(np.linalg.inv(R))
-    R = np.linalg.cholesky(np.linalg.inv(R))
+    # R = np.cov(noise)
+    # R /= np.mean(abs(np.diag(R)))
+    # R[np.diag_indices_from(R)] = abs(R[np.diag_indices_from(R)])
+    # # R = sqrtm(np.linalg.inv(R))
+    # R = np.linalg.cholesky(np.linalg.inv(R))
 
-    return R
+    # return R
 
 
 def remove_os(data, axis=0):
@@ -120,14 +120,14 @@ def process(connection, config, metadata):
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
                     noiseGroup.append(item)
                     continue
-                # elif len(noiseGroup) > 0 and dmtx is None:
-                #     noise_data = []
-                #     for acq in noiseGroup:
-                #         noise_data.append(acq.data)
-                #     noise_data = np.concatenate(noise_data, axis=1)
-                #     # calculate pre-whitening matrix
-                #     dmtx = calculate_prewhitening(noise_data)
-                #     del(noise_data)
+                elif len(noiseGroup) > 0 and dmtx is None:
+                    noise_data = []
+                    for acq in noiseGroup:
+                        noise_data.append(acq.data)
+                    noise_data = np.concatenate(noise_data, axis=1)
+                    # calculate pre-whitening matrix
+                    dmtx = calculate_prewhitening(noise_data)
+                    del(noise_data)
                 
                 
                 # Accumulate all imaging readouts in a group
@@ -136,6 +136,9 @@ def process(connection, config, metadata):
                 elif item.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
                     acsGroup[item.idx.slice].append(item)
                     continue
+                elif sensmaps[item.idx.slice] is None:
+                    # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
 
 
                 acqGroup.append(item)
@@ -144,9 +147,6 @@ def process(connection, config, metadata):
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    if sensmaps[item.idx.slice] is None:
-                        # run parallel imaging calibration
-                        sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
                     images = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
@@ -268,7 +268,9 @@ def rot(mat, n_intl, rot=2*np.pi):
     # returns a new trajectory/gradient array with size [n_intl, 2, n_samples]
     phi = np.linspace(0, rot, n_intl, endpoint=False)
 
-    rot_mat = np.asarray([[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]])
+    # rot_mat = np.asarray([[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]])
+    # new orientation (switch x and y):
+    rot_mat = np.asarray([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
     rot_mat = np.moveaxis(rot_mat,-1,0)
 
     return rot_mat @ mat
@@ -289,7 +291,6 @@ def gcs_to_dcs(grads, rotmat):
     grads_cv : numpy.ndarray
                Converted gradient
     """
-    grads = grads.copy()
     
     # rotation from GCS (PHASE,READ,SLICE) to patient coordinate system (PCS)
     grads_cv = np.matmul(rotmat, grads)
@@ -406,17 +407,11 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
 
-    # switch x and y for old rot function
-    grad[[0,1]] = grad[[1,0]]
-
     # and finally rotate for each interleave
     if spiralType == 3:
         grad = rot(grad, nitlv, np.pi)
     else:
         grad = rot(grad, nitlv)
-
-    # switch x and y back from old rot function
-    grad[:,[0,1]] = grad[:,[1,0]]
 
     # add z-dir:
     grad = np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
@@ -463,8 +458,6 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
     gradtime_pred = dt_grad * np.arange(pred_trj.shape[-1])
     gradtime_pred -= 2*dt_grad # account for two zero-fills
 
-    np.save(debugFolder + "/" + "pred_trj_pre.npy", pred_trj)
-
     # interpolate trajectory to scanner dwelltime
     pred_trj = intp_axis(adctime_girf, gradtime_pred, pred_trj, axis=-1)
 
@@ -475,15 +468,10 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
         base_trj -= np.sum(grad, axis=-1)[:,:,np.newaxis]/2.
     # proper scaling for bart
     base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
-    
-    np.save(debugFolder + "/" + "base_trj_pre.npy", base_trj)
 
     # interpolate trajectory to scanner dwelltime
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1)
 
-    np.save(debugFolder + "/" + "gradtime.npy", gradtime)
-    np.save(debugFolder + "/" + "adctime.npy", adctime)
-    np.save(debugFolder + "/" + "adctime_girf.npy", adctime_girf)
     np.save(debugFolder + "/" + "base_trj.npy", base_trj)
     np.save(debugFolder + "/" + "pred_trj.npy", pred_trj)
 
@@ -550,9 +538,8 @@ def sort_spiral_data(group, metadata, dmtx=None):
 
     # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
     trj = np.transpose(trj, [1, 2, 0])
-    sig = np.transpose(sig[np.newaxis], [0, 3, 1, 2])
+    sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
 
-    np.save(debugFolder + "/" + "trj.npy", trj)
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
 
     return sig, trj
@@ -562,7 +549,7 @@ def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
-        sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I ', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
         return sensmaps
