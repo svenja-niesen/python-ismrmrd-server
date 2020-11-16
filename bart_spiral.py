@@ -133,6 +133,8 @@ def process(connection, config, metadata):
                 # Accumulate all imaging readouts in a group
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
                     continue
+                elif item.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA): # skope sync scans
+                    continue
                 elif item.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
                     acsGroup[item.idx.slice].append(item)
                     continue
@@ -520,7 +522,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
         enc.append([enc1, enc2])
         
         # update 3D dir.
-        tmp = base_trj[enc1]
+        tmp = base_trj[enc1].copy()
         tmp[-1] = kz * np.ones(tmp.shape[-1])
         trj.append(tmp)    
 
@@ -541,6 +543,8 @@ def sort_spiral_data(group, metadata, dmtx=None):
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
 
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
+    
+    np.save(debugFolder + "/" + "trj.npy", trj)
 
     return sig, trj
 

@@ -42,7 +42,7 @@ RUN cd /opt/code \
 
 # siemens_to_ismrmrd converter
 RUN cd /opt/code \
-    && git clone https://github.com/ismrmrd/siemens_to_ismrmrd.git \
+    && git clone -b 32bit_evalInfoMask_fix https://github.com/pehses/siemens_to_ismrmrd.git \
     && cd siemens_to_ismrmrd \
     && cp /opt/code/python-ismrmrd-server/parameter_maps/* parameter_maps/ \
     && mkdir build \
@@ -50,6 +50,7 @@ RUN cd /opt/code \
     && cmake ../ \
     && make -j $(nproc) \
     && make install
+#     && git clone https://github.com/ismrmrd/siemens_to_ismrmrd.git \
 
 # compile & install the bart MRI toolbox
 RUN  cd /opt/code \
