@@ -471,15 +471,18 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     grad = spiraltraj.calc_traj(nitlv=nitlv, res=res, fov=fov, max_amp=max_amp, min_rise=min_rise, spiraltype=spiralType)
     grad = np.asarray(grad).T # -> [2, nsamples]
 
+    
+    adctime = dwelltime * np.arange(0.5, ncol)
     # Determine start of first spiral gradient & first ADC
-    adc_shift = 0
     if spiralType > 2:
         # new: small timing fix for double spiral
         # align center of gradient & adc
         grad_totaltime = dt_grad * (grad.shape[-1])
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
-    print("adc_shift = %f, adc_duration = %f"%(adc_shift, dwelltime * ncol))
+        adctime += adc_shift
+        print("adc_shift = %f, adc_duration = %f"%(adc_shift, adc_duration))
+
 
     gradshift = 0
     if spiralType > 2: # for double spiral traj.
@@ -505,21 +508,20 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     # add z-dir:
     grad = np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
 
-    # time vectors for interpolation
+    # time vector for interpolation
     gradtime = dt_grad * np.arange(grad.shape[-1]) + gradshift
-    adctime = dwelltime * np.arange(0.5, ncol) + adc_shift
-
-    print("gradtime[0, -1] = [%f, %f], adctime[0, -1] = [%f, %f]"%(gradtime[0], gradtime[-1], adctime[0], adctime[-1]))
 
     # calculate base trajectory from gradient (with proper scaling for bart)
     base_trj =  np.cumsum(grad.real, axis=-1)
-    adctime -= dt_grad/2  # account for cumsum
+    gradtime += dt_grad/2  # account for cumsum
 
     # proper scaling for bart
     base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
 
     # interpolate trajectory to scanner dwelltime
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1) # 2.5us seems to be a useful shift
+
+    np.save(debugFolder + "/" + "base_trj.npy", base_trj)
 
 
     ##############################
@@ -530,30 +532,29 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     girf = np.load(filepath + "/girf/girf_10us.npy")
 
     # rotation to phys coord system
-    pred_grad = dcs_to_gcs(grad, rot_mat)
-    
+    pred_grad = gcs_to_dcs(grad, rot_mat)
+
     # gradient prediction
     pred_grad = grad_pred(pred_grad, girf) 
 
     # rotate back to logical system
-    pred_grad = gcs_to_dcs(pred_grad, rot_mat)
+    pred_grad = dcs_to_gcs(pred_grad, rot_mat)
+
     pred_grad[:, 2] = 0. # set z-gradient to zero, otherwise bart reco crashess
+
+    # time vector for interpolation
+    gradtime = dt_grad * np.arange(pred_grad.shape[-1]) + gradshift
 
     # calculate trajectory 
     pred_trj = np.cumsum(pred_grad.real, axis=-1)
-    gradshift += dt_grad/2 # account for cumsum
+    gradtime += dt_grad/2 # account for cumsum
 
     # proper scaling for bart
     pred_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
-    
-    # account for cumsum shift
-    adctime_girf = dwelltime * np.arange(0.5, ncol) + adc_shift
-    gradtime_pred = dt_grad * np.arange(pred_grad.shape[-1]) + gradshift
 
     # interpolate trajectory to scanner dwelltime
-    pred_trj = intp_axis(adctime_girf, gradtime_pred, pred_trj, axis=-1)
+    pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=-1)
     
-    np.save(debugFolder + "/" + "base_trj.npy", base_trj)
     np.save(debugFolder + "/" + "pred_trj.npy", pred_trj)
 
     # pred_trj = np.load(filepath + "/girf/girf_traj_doublespiral.npy")
@@ -658,7 +659,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
-    force_pics = False
+    force_pics = True
     if sensmaps is None and force_pics:
         sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
