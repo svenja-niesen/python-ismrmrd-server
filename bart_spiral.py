@@ -453,6 +453,7 @@ def trap_from_area(area, ramptime, ftoptime, dt_grad=10e-6):
     
 def calc_spiral_traj(ncol, rot_mat, encoding):
     dt_grad = 10e-6
+    dt_skope = 1e-6
     gammabar = 42.577e6
 
     nx = encoding.encodedSpace.matrixSize.x
@@ -480,6 +481,11 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
         grad_totaltime = dt_grad * (grad.shape[-1])
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
+
+        # there seems to be a small time error in the GIRF calculation
+        # but the image looks better without, so leaving this line out may account for another error
+        # adc_shift -= dt_skope/2 
+
         adctime += adc_shift
         print("adc_shift = %f, adc_duration = %f"%(adc_shift, adc_duration))
 
