@@ -439,6 +439,7 @@ def trap_from_area(area, ramptime, ftoptime, dt_grad=10e-6):
     """
     n_ramp = int(ramptime/dt_grad+0.5)
     n_ftop = int(ftoptime/dt_grad+0.5)
+    #print('ramptime = %f, ftoptime = %f, n_ramp = %d, n_ftop = %d'%(ramptime, ftoptime, n_ramp, n_ftop))
     amp = area/(ftoptime+ramptime)
     ramp = np.arange(0.5, n_ramp)/n_ramp
     while np.ndim(ramp) < np.ndim(amp) + 1:
@@ -493,8 +494,8 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     gradshift = 0
     if spiralType > 2: # for double spiral traj.
         # prepend gradient dephaser
-        deph_ru = 1e-6 * encoding.trajectoryDescription.userParameterLong[2].value_  # s
-        deph_ft = 1e-6 * encoding.trajectoryDescription.userParameterLong[3].value_  # s
+        deph_ru = 1e-6 * encoding.trajectoryDescription.userParameterLong[3].value_  # s
+        deph_ft = 1e-6 * encoding.trajectoryDescription.userParameterLong[4].value_  # s
         area = -dt_grad * np.sum(grad[..., :grad.shape[-1]//2], -1)
         dephaser = trap_from_area(area, deph_ru, deph_ft, dt_grad=dt_grad)
 
