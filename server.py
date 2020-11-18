@@ -83,6 +83,8 @@ class Server:
                 bart_pics.process(connection, config, metadata)
             elif (config == "bart_spiral"):
                 import bart_spiral
+                import importlib
+                importlib.reload(bart_spiral)
                 logging.info("Starting bart_spiral processing based on config")
                 bart_spiral.process(connection, config, metadata)
             elif (config == "invertcontrast"):

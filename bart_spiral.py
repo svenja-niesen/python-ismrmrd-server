@@ -9,6 +9,7 @@ import base64
 
 from bart import bart
 import spiraltraj
+from cfft import cfftn, cifftn
 
 
 # from ismrmdrdtools (wip: import from ismrmrdtools instead)
@@ -26,22 +27,14 @@ def calculate_prewhitening(noise, scale_factor=1.0):
     # from scipy.linalg import sqrtm
 
     noise = noise.reshape((noise.shape[0], noise.size//noise.shape[0]))
-    
-    M = float(noise.shape[1])
-    dmtx = (1/(M-1))*np.asmatrix(noise)*np.asmatrix(noise).H
-    dmtx = np.linalg.inv(np.linalg.cholesky(dmtx))
-    dmtx = dmtx*np.sqrt(2)*np.sqrt(scale_factor)
-    
-    # channel-wise scaling correct? (conjugate) transpose ok?
-    return dmtx
 
-    # R = np.cov(noise)
-    # R /= np.mean(abs(np.diag(R)))
-    # R[np.diag_indices_from(R)] = abs(R[np.diag_indices_from(R)])
-    # # R = sqrtm(np.linalg.inv(R))
-    # R = np.linalg.cholesky(np.linalg.inv(R))
+    R = np.cov(noise)
+    R /= np.mean(abs(np.diag(R)))
+    R[np.diag_indices_from(R)] = abs(R[np.diag_indices_from(R)])
+    # R = sqrtm(np.linalg.inv(R))
+    R = np.linalg.cholesky(np.linalg.inv(R))
 
-    # return R
+    return R
 
 
 def remove_os(data, axis=0):
@@ -278,6 +271,41 @@ def rot(mat, n_intl, rot=2*np.pi):
     return rot_mat @ mat
 
 
+def pcs_to_dcs(grads, patient_position='HFS'):
+    """ Convert from patient coordinate system (PCS, physical) 
+        to device coordinate system (DCS, physical)
+        this is valid for patient orientation head first/supine
+    """
+    grads = grads.copy()
+
+    # only valid for head first/supine - other orientations see IDEA UserGuide
+    if patient_position.upper() == 'HFS':
+        grads[:,1] *= -1
+        grads[:,2] *= -1
+    else:
+        raise ValueError
+
+    return grads
+
+def dcs_to_pcs(grads, patient_position='HFS'):
+    """ Convert from device coordinate system (DCS, physical) 
+        to patient coordinate system (DCS, physical)
+        this is valid for patient orientation head first/supine
+    """
+    return pcs_to_dcs(grads, patient_position) # same sign switch
+    
+def gcs_to_pcs(grads, rotmat):
+    """ Convert from gradient coordinate system (GCS, logical) 
+        to patient coordinate system (DCS, physical)
+    """
+    return np.matmul(rotmat, grads)
+
+def pcs_to_gcs(grads, rotmat):
+    """ Convert from patient coordinate system (PCS, physical) 
+        to gradient coordinate system (GCS, logical) 
+    """
+    return np.matmul(np.linalg.inv(rotmat), grads)
+
 def gcs_to_dcs(grads, rotmat):
     """ Convert from gradient coordinate system (GCS, logical) 
         to device coordinate system (DCS, physical)
@@ -293,16 +321,16 @@ def gcs_to_dcs(grads, rotmat):
     grads_cv : numpy.ndarray
                Converted gradient
     """
-    
+    grads = grads.copy()
+
     # rotation from GCS (PHASE,READ,SLICE) to patient coordinate system (PCS)
-    grads_cv = np.matmul(rotmat, grads)
+    grads = gcs_to_pcs(grads, rotmat)
     
     # PCS (SAG,COR,TRA) to DCS (X,Y,Z)
     # only valid for head first/supine - other orientations see IDEA UserGuide
-    grads_cv[:,1] *= -1
-    grads_cv[:,2] *= -1
+    grads = pcs_to_dcs(grads)
     
-    return grads_cv
+    return grads
 
 
 def dcs_to_gcs(grads, rotmat):
@@ -324,23 +352,44 @@ def dcs_to_gcs(grads, rotmat):
     
     # DCS (X,Y,Z) to PCS (SAG,COR,TRA)
     # only valid for head first/supine - other orientations see IDEA UserGuide
-    grads[:,1] *= -1
-    grads[:,2] *= -1
+    grads = dcs_to_pcs(grads)
     
     # PCS (SAG,COR,TRA) to GCS (PHASE,READ,SLICE)
-    grads_cv = np.matmul(np.linalg.inv(rotmat), grads)
+    grads = pcs_to_gcs(grads, rotmat)
     
-    return grads_cv
+    return grads
+
+
+def fov_shift_spiral(sig, trj, shift, matr_sz):
+    """ 
+    shift field of view of spiral data
+    sig:  rawdata [ncha, nsamples]
+    trj:    trajectory [3, nsamples]
+    # shift:   shift [x_shift, y_shift] in voxel
+    shift:   shift [y_shift, x_shift] in voxel
+    matr_sz: matrix size of reco
+    """
+
+    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
+        # nothing to do
+        return sig
+
+    kmax = int(matr_sz/2+0.5)
+    sig *= np.exp(-1j*(shift[0]*np.pi*trj[0]/kmax-shift[1]*np.pi*trj[1]/kmax))[np.newaxis]
+
+    return sig
+
 
 
 def intp_axis(newgrid, oldgrid, data, axis=0):
     # interpolation along an axis (shape of newgrid, oldgrid and data see np.interp)
-    temp = np.moveaxis(data.copy(), axis, 0)
-    newshape = [len(newgrid)] + list(temp.shape[1:])
-    temp = temp.reshape((temp.shape[0], -1))
-    intp_data = np.zeros((len(newgrid), temp.shape[-1]), dtype=data.dtype)
-    for k in range(temp.shape[-1]):
-        intp_data[:, k] = np.interp(newgrid, oldgrid, temp[:, k])
+    tmp = np.moveaxis(data.copy(), axis, 0)
+    newshape = (len(newgrid),) + tmp.shape[1:]
+    tmp = tmp.reshape((len(oldgrid), -1))
+    n_elem = tmp.shape[-1]
+    intp_data = np.zeros((len(newgrid), n_elem), dtype=data.dtype)
+    for k in range(n_elem):
+        intp_data[:, k] = np.interp(newgrid, oldgrid, tmp[:, k])
     intp_data = intp_data.reshape(newshape)
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data
@@ -360,11 +409,7 @@ def grad_pred(grad, girf):
     girf_sampl = girf.shape[-1]
 
     # remove k0 from girf:
-    girf = girf.copy()[:,1:]
-    
-    # # WIP: THE FOLLOWING LINE IS ONLY REQUIRED FOR OLD DATA, SWITCH X & Y
-    # girf = girf[[1,0,2], :, :]
-    # girf = girf[:,[1,0,2], :]
+    girf = girf[:,1:]
 
     # zero-fill grad to number of girf samples (add check?)
     grad = np.concatenate([grad.copy(), np.zeros([grad.shape[0], ndim, girf_sampl-grad_sampl])], axis=-1)
@@ -382,32 +427,74 @@ def grad_pred(grad, girf):
     pred_grad = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(pred_grad, axes=-1), axis=-1), axes=-1)
     
     # cut out relevant part
-    # pred_grad = pred_grad[:,:,:grad_sampl]
+    pred_grad = pred_grad[:,:,:grad_sampl]
 
     return pred_grad
 
 
-def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_rise, spiralType):
+def trap_from_area(area, ramptime, ftoptime, dt_grad=10e-6):
+    """create trapezoidal_gradient with selectable gradient moment
+    area in [T/m*s]
+    ramptime/ftoptime in [s]
+    """
+    n_ramp = int(ramptime/dt_grad+0.5)
+    n_ftop = int(ftoptime/dt_grad+0.5)
+    amp = area/(ftoptime+ramptime)
+    ramp = np.arange(0.5, n_ramp)/n_ramp
+    while np.ndim(ramp) < np.ndim(amp) + 1:
+        ramp = ramp[np.newaxis]
+    
+    ramp = amp[..., np.newaxis] * ramp
+        
+    zeros = np.zeros(area.shape + (1,))
+    grad = np.concatenate((zeros, ramp, amp[..., np.newaxis]*np.ones(area.shape + (n_ftop,)), ramp[...,::-1], zeros), -1)
+    return grad
+
+    
+def calc_spiral_traj(ncol, rot_mat, encoding):
     dt_grad = 10e-6
-    dt_skope = 1e-6
     gammabar = 42.577e6
+
+    nx = encoding.encodedSpace.matrixSize.x
+    spiralType = int(encoding.trajectoryDescription.userParameterLong[1].value_)
+    nitlv = int(encoding.trajectoryDescription.userParameterLong[0].value_)
+    fov = encoding.reconSpace.fieldOfView_mm.x
+    res = fov/nx
+    max_amp = encoding.trajectoryDescription.userParameterDouble[0].value_
+    min_rise = encoding.trajectoryDescription.userParameterDouble[1].value_
+    dwelltime = 1e-6 * encoding.trajectoryDescription.userParameterDouble[2].value_  # s
+    spiralOS = encoding.trajectoryDescription.userParameterLong[4].value_  # int_32
+    spiralOS = np.frombuffer(np.uint32(spiralOS), 'float32')[0]
 
     logging.debug("spiralType = %s, nitlv = %s, fov = %s, res = %s, max_amp = %s, min_rise = %s, " % (spiralType, nitlv, fov, res, max_amp, min_rise))
 
     grad = spiraltraj.calc_traj(nitlv=nitlv, res=res, fov=fov, max_amp=max_amp, min_rise=min_rise, spiraltype=spiralType)
     grad = np.asarray(grad).T # -> [2, nsamples]
 
-    # add zeros around gradient
-    grad = np.concatenate((np.zeros([2,1]), grad, np.zeros([2,1])), axis=-1)
-
     # Determine start of first spiral gradient & first ADC
     adc_shift = 0
     if spiralType > 2:
         # new: small timing fix for double spiral
         # align center of gradient & adc
-        grad_totaltime = dt_grad * (grad.shape[-1]-2)
+        grad_totaltime = dt_grad * (grad.shape[-1])
         adc_duration = dwelltime * ncol
         adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
+    print("adc_shift = %f, adc_duration = %f"%(adc_shift, dwelltime * ncol))
+
+    gradshift = 0
+    if spiralType > 2: # for double spiral traj.
+        # prepend gradient dephaser
+        deph_ru = 1e-6 * encoding.trajectoryDescription.userParameterLong[2].value_  # s
+        deph_ft = 1e-6 * encoding.trajectoryDescription.userParameterLong[3].value_  # s
+        area = -dt_grad * np.sum(grad[..., :grad.shape[-1]//2], -1)
+        dephaser = trap_from_area(area, deph_ru, deph_ft, dt_grad=dt_grad)
+
+        grad = np.concatenate((dephaser, grad), -1)
+        gradshift -= dephaser.shape[-1] * dt_grad
+
+    # add zeros around gradient
+    grad = np.concatenate((np.zeros([2,1]), grad, np.zeros([2,1])), axis=-1)
+    gradshift -= dt_grad
 
     # and finally rotate for each interleave
     if spiralType == 3:
@@ -417,6 +504,22 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
 
     # add z-dir:
     grad = np.concatenate((grad, np.zeros([grad.shape[0], 1, grad.shape[2]])), axis=1)
+
+    # time vectors for interpolation
+    gradtime = dt_grad * np.arange(grad.shape[-1]) + gradshift
+    adctime = dwelltime * np.arange(0.5, ncol) + adc_shift
+
+    print("gradtime[0, -1] = [%f, %f], adctime[0, -1] = [%f, %f]"%(gradtime[0], gradtime[-1], adctime[0], adctime[-1]))
+
+    # calculate base trajectory from gradient (with proper scaling for bart)
+    base_trj =  np.cumsum(grad.real, axis=-1)
+    adctime -= dt_grad/2  # account for cumsum
+
+    # proper scaling for bart
+    base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
+
+    # interpolate trajectory to scanner dwelltime
+    base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1) # 2.5us seems to be a useful shift
 
 
     ##############################
@@ -428,54 +531,33 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
 
     # rotation to phys coord system
     pred_grad = dcs_to_gcs(grad, rot_mat)
-
+    
     # gradient prediction
     pred_grad = grad_pred(pred_grad, girf) 
 
     # rotate back to logical system
     pred_grad = gcs_to_dcs(pred_grad, rot_mat)
-    pred_grad[:, 2] = 0. # set z-gradient to zero, otherwise bart reco crashes
-    
-    logging.debug("allclose of gcs_to_dcs(dcs_to_gcs)? = %s"%(np.allclose(grad, gcs_to_dcs(dcs_to_gcs(grad, rot_mat), rot_mat)),))
+    pred_grad[:, 2] = 0. # set z-gradient to zero, otherwise bart reco crashess
 
-    # time vectors for interpolation
-    gradtime = dt_grad * np.arange(grad.shape[-1])
-    gradtime -= dt_grad # account for zero-fill
-    adctime = dwelltime * np.arange(0.5, ncol) + adc_shift
+    # calculate trajectory 
+    pred_trj = np.cumsum(pred_grad.real, axis=-1)
+    gradshift += dt_grad/2 # account for cumsum
 
-    # zero-fill pred_grad again (for proper cumsum)
-    pred_grad = np.concatenate((np.zeros([pred_grad.shape[0], 3, 1]), grad), axis=-1)
-
-    # calculate k-space trajectory
-    pred_trj =  np.cumsum(pred_grad.real, axis=-1)
-    if spiralType > 2:
-        # add dephasing moment
-        # deph_ru = metadata.encoding[0].trajectoryDescription.userParameterLong[2].value_  # us
-        # deph_ft = metadata.encoding[0].trajectoryDescription.userParameterLong[3].value_  # us
-        pred_trj -= np.sum(grad, axis=-1)[:,:,np.newaxis]/2.
     # proper scaling for bart
     pred_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
-
-    adctime_girf = adctime - (dt_grad-dt_skope)/2 # subtract dt_grad/2 for 10us GIRF
-    gradtime_pred = dt_grad * np.arange(pred_trj.shape[-1])
-    gradtime_pred -= 2*dt_grad # account for two zero-fills
+    
+    # account for cumsum shift
+    adctime_girf = dwelltime * np.arange(0.5, ncol) + adc_shift
+    gradtime_pred = dt_grad * np.arange(pred_grad.shape[-1]) + gradshift
 
     # interpolate trajectory to scanner dwelltime
     pred_trj = intp_axis(adctime_girf, gradtime_pred, pred_trj, axis=-1)
-
-    # calculate base trajectory from gradient (with proper scaling for bart)
-    base_trj =  np.cumsum(grad.real, axis=-1)
-    if spiralType > 2:
-        # add dephasing moment
-        base_trj -= np.sum(grad, axis=-1)[:,:,np.newaxis]/2.
-    # proper scaling for bart
-    base_trj *= 1e-3 * dt_grad * gammabar * (1e-3 * fov)
-
-    # interpolate trajectory to scanner dwelltime
-    base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1)
-
+    
     np.save(debugFolder + "/" + "base_trj.npy", base_trj)
     np.save(debugFolder + "/" + "pred_trj.npy", pred_trj)
+
+    # pred_trj = np.load(filepath + "/girf/girf_traj_doublespiral.npy")
+    # pred_trj = np.transpose(pred_trj, [2, 0, 1])
 
     # now we can switch x and y dir for correct orientation in FIRE
     pred_trj = pred_trj[:,[1,0,2],:]
@@ -487,20 +569,11 @@ def calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_ris
 
 
 def sort_spiral_data(group, metadata, dmtx=None):
-
-    # spiral_af = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
+   
+    nx = metadata.encoding[0].encodedSpace.matrixSize.x
+    nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
-    nz = metadata.encoding[0].encodedSpace.matrixSize.z    
-    spiralType = int(metadata.encoding[0].trajectoryDescription.userParameterLong[1].value_)
-    nitlv = int(metadata.encoding[0].trajectoryDescription.userParameterLong[0].value_)
-    fov = metadata.encoding[0].reconSpace.fieldOfView_mm.x
-    res = fov/metadata.encoding[0].encodedSpace.matrixSize.x
-    max_amp = metadata.encoding[0].trajectoryDescription.userParameterDouble[0].value_
-    min_rise = metadata.encoding[0].trajectoryDescription.userParameterDouble[1].value_
-    dwelltime = 1e-6 * metadata.encoding[0].trajectoryDescription.userParameterDouble[2].value_  # s
-    spiralOS = metadata.encoding[0].trajectoryDescription.userParameterLong[4].value_  # int_32
-    spiralOS = np.frombuffer(np.uint32(spiralOS), 'float32')[0]
-
+    
     phase_dir = np.asarray(group[0].phase_dir)
     read_dir = np.asarray(group[0].read_dir)
     slice_dir = np.asarray(group[0].slice_dir)
@@ -509,7 +582,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
 
     rot_mat = np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
 
-    base_trj = calc_spiral_traj(ncol, dwelltime, nitlv, res, fov, rot_mat, max_amp, min_rise, spiralType)
+    base_trj = calc_spiral_traj(ncol, rot_mat, metadata.encoding[0])
 
     sig = list()
     trj = list()
@@ -517,6 +590,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     for acq in group:
         enc1 = acq.idx.kspace_encode_step_1
         enc2 = acq.idx.kspace_encode_step_2
+
         kz = enc2 - nz//2
         
         enc.append([enc1, enc2])
@@ -524,13 +598,17 @@ def sort_spiral_data(group, metadata, dmtx=None):
         # update 3D dir.
         tmp = base_trj[enc1].copy()
         tmp[-1] = kz * np.ones(tmp.shape[-1])
-        trj.append(tmp)    
+        trj.append(tmp)
 
         # and append data after optional prewhitening
         if dmtx is None:
             sig.append(acq.data)
         else:
             sig.append(apply_prewhitening(acq.data, dmtx))
+
+        # apply fov shift
+        shift = pcs_to_gcs(np.asarray(acq.position), rot_mat)
+        sig[-1] = fov_shift_spiral(sig[-1], tmp, shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
@@ -553,7 +631,7 @@ def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I ', data)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
         return sensmaps
@@ -580,17 +658,24 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
+    force_pics = False
+    if sensmaps is None and force_pics:
+        sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
+        sensmaps = bart(1, 'ecalib -m 1 -I -r 32', sensmaps)  # ESPIRiT calibration
+
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
-        
+            
         # bart nufft with nominal trajectory
-        data = bart(1, 'nufft -i -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
-        # data = bart(1, 'nufft -i -t', trj, data) # nufft
+        data = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
 
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
-        data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
+        # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
+        data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
