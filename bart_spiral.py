@@ -457,15 +457,18 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     dt_skope = 1e-6
     gammabar = 42.577e6
 
+    traj_params = {item.name: item.value_ for item in encoding.trajectoryDescription.userParameterLong}
+    traj_params.update({item.name: item.value_ for item in encoding.trajectoryDescription.userParameterDouble})
+
     nx = encoding.encodedSpace.matrixSize.x
-    spiralType = int(encoding.trajectoryDescription.userParameterLong[1].value_)
-    nitlv = int(encoding.trajectoryDescription.userParameterLong[0].value_)
     fov = encoding.reconSpace.fieldOfView_mm.x
     res = fov/nx
-    max_amp = encoding.trajectoryDescription.userParameterDouble[0].value_
-    min_rise = encoding.trajectoryDescription.userParameterDouble[1].value_
-    dwelltime = 1e-6 * encoding.trajectoryDescription.userParameterDouble[2].value_  # s
-    spiralOS = encoding.trajectoryDescription.userParameterLong[4].value_  # int_32
+    spiralType = int(traj_params['spiralType'])
+    nitlv = int(traj_params['interleaves'])
+    max_amp = traj_params['MaxGradient_mT_per_m']
+    min_rise = traj_params['MaxRiseTime_mT_per_m_per_ms']
+    dwelltime = 1e-6 * traj_params['dwellTime_us']  # s
+    spiralOS = traj_params['fSpiralOS_reinterpret_cast_to_int32']  # int_32
     spiralOS = np.frombuffer(np.uint32(spiralOS), 'float32')[0]
 
     logging.debug("spiralType = %s, nitlv = %s, fov = %s, res = %s, max_amp = %s, min_rise = %s, " % (spiralType, nitlv, fov, res, max_amp, min_rise))
@@ -475,6 +478,7 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
 
     
     adctime = dwelltime * np.arange(0.5, ncol)
+
     # Determine start of first spiral gradient & first ADC
     if spiralType > 2:
         # new: small timing fix for double spiral
@@ -489,13 +493,16 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
 
         adctime += adc_shift
         print("adc_shift = %f, adc_duration = %f"%(adc_shift, adc_duration))
+    else:
+        # adctime += 1e-6 # seems to work for spiralout (makes no difference to image but traj. closer to skope meas.)
+        pass
 
 
     gradshift = 0
     if spiralType > 2: # for double spiral traj.
         # prepend gradient dephaser
-        deph_ru = 1e-6 * encoding.trajectoryDescription.userParameterLong[3].value_  # s
-        deph_ft = 1e-6 * encoding.trajectoryDescription.userParameterLong[4].value_  # s
+        deph_ru = 1e-6 * traj_params['dephRampUp']  # s
+        deph_ft = 1e-6 * traj_params['dephFlatTop']  # s
         area = -dt_grad * np.sum(grad[..., :grad.shape[-1]//2], -1)
         dephaser = trap_from_area(area, deph_ru, deph_ft, dt_grad=dt_grad)
 
@@ -577,19 +584,18 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
 
 
 def sort_spiral_data(group, metadata, dmtx=None):
-   
+    
+    def calc_rotmat(acq):
+        phase_dir = np.asarray(acq.phase_dir)
+        read_dir = np.asarray(acq.read_dir)
+        slice_dir = np.asarray(acq.slice_dir)
+        return np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
+
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
-    
-    phase_dir = np.asarray(group[0].phase_dir)
-    read_dir = np.asarray(group[0].read_dir)
-    slice_dir = np.asarray(group[0].slice_dir)
-    
-    print("read_dir = [%f, %f, %f], phase_dir = [%f, %f, %f], slice_dir = [%f, %f, %f]"%(read_dir[0], read_dir[1], read_dir[2], phase_dir[0], phase_dir[1], phase_dir[2], slice_dir[0], slice_dir[1], slice_dir[2]))
 
-    rot_mat = np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
-
+    rot_mat = calc_rotmat(group[0])
     base_trj = calc_spiral_traj(ncol, rot_mat, metadata.encoding[0])
 
     sig = list()
