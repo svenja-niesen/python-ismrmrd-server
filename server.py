@@ -87,6 +87,12 @@ class Server:
                 importlib.reload(bart_spiral)
                 logging.info("Starting bart_spiral processing based on config")
                 bart_spiral.process(connection, config, metadata)
+            elif (config == "bart_pulseq"):
+                import bart_pulseq
+                import importlib
+                importlib.reload(bart_pulseq)
+                logging.info("Starting bart_pulseq processing based on config")
+                bart_pulseq.process(connection, config, metadata)
             elif (config == "invertcontrast"):
                 logging.info("Starting invertcontrast processing based on config")
                 invertcontrast.process(connection, config, metadata)

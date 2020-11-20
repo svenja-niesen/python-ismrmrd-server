@@ -374,8 +374,7 @@ def fov_shift_spiral(sig, trj, shift, matr_sz):
         # nothing to do
         return sig
 
-    kmax = int(matr_sz/2+0.5)
-    sig *= np.exp(-1j*(shift[0]*np.pi*trj[0]/kmax-shift[1]*np.pi*trj[1]/kmax))[np.newaxis]
+    sig *= np.exp(1j*(-shift[1]*np.pi*trj[0]/matr_sz-shift[0]*np.pi*trj[1]/matr_sz))[np.newaxis]
 
     return sig
 
