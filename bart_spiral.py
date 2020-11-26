@@ -60,9 +60,11 @@ def apply_prewhitening(data, dmtx):
     return np.asarray(np.asmatrix(dmtx)*np.asmatrix(data.reshape(data.shape[0],data.size//data.shape[0]))).reshape(s)
     
 
+# Folder for sharing data/debugging
+shareFolder = "/tmp/share"
+debugFolder = os.path.join(shareFolder, "debug")
+dependFolder = os.path.join(shareFolder, "dependency")
 
-# Folder for debug output files
-debugFolder = "/tmp/share/debug"
 
 def process(connection, config, metadata):
     logging.info("Config: \n%s", config)
@@ -415,7 +417,6 @@ def grad_pred(grad, girf):
 
     # FFT
     grad = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(grad, axes=-1), axis=-1), axes=-1)
-    print('girf.shape =%s, grad.shape = %s'%(girf.shape, grad.shape))
 
     # apply girf to nominal gradients
     pred_grad = np.zeros_like(grad)
@@ -438,7 +439,6 @@ def trap_from_area(area, ramptime, ftoptime, dt_grad=10e-6):
     """
     n_ramp = int(ramptime/dt_grad+0.5)
     n_ftop = int(ftoptime/dt_grad+0.5)
-    #print('ramptime = %f, ftoptime = %f, n_ramp = %d, n_ftop = %d'%(ramptime, ftoptime, n_ramp, n_ftop))
     amp = area/(ftoptime+ramptime)
     ramp = np.arange(0.5, n_ramp)/n_ramp
     while np.ndim(ramp) < np.ndim(amp) + 1:
@@ -479,22 +479,15 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     adctime = dwelltime * np.arange(0.5, ncol)
 
     # Determine start of first spiral gradient & first ADC
+    adc_shift = dt_skope/2 # empirically determined, seems to work better (may be there is a delay in the skope measurement?)
     if spiralType > 2:
         # new: small timing fix for double spiral
         # align center of gradient & adc
         grad_totaltime = dt_grad * (grad.shape[-1])
         adc_duration = dwelltime * ncol
-        adc_shift = np.round((grad_totaltime - adc_duration)/2., 6)
-
-        # there seems to be a small time error in the GIRF calculation
-        # but the image looks better without, so leaving this line out may account for another error
-        # adc_shift -= dt_skope/2 
-
-        adctime += adc_shift
-        print("adc_shift = %f, adc_duration = %f"%(adc_shift, adc_duration))
-    else:
-        # adctime += 1e-6 # seems to work for spiralout (makes no difference to image but traj. closer to skope meas.)
-        pass
+        adc_shift += np.round((grad_totaltime - adc_duration)/2., 6)
+    
+    adctime += adc_shift
 
 
     gradshift = 0
@@ -509,11 +502,12 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
         gradshift -= dephaser.shape[-1] * dt_grad
 
     # add zeros around gradient
-    grad = np.concatenate((np.zeros([2,1]), grad, np.zeros([2,1])), axis=-1)
-    gradshift -= dt_grad
+    zfills = 8
+    grad = np.concatenate((np.zeros([2, zfills]), grad, np.zeros([2, zfills])), axis=-1)
+    gradshift -= zfills*dt_grad
 
     # and finally rotate for each interleave
-    if spiralType == 3:
+    if spiralType == 3 and nitlv%2==0:
         grad = rot(grad, nitlv, np.pi)
     else:
         grad = rot(grad, nitlv)
@@ -534,15 +528,14 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     # interpolate trajectory to scanner dwelltime
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=-1) # 2.5us seems to be a useful shift
 
-    np.save(debugFolder + "/" + "base_trj.npy", base_trj)
+    np.save(os.path.join(debugFolder, "base_trj.npy"), base_trj)
 
 
     ##############################
     ## girf trajectory prediction:
     ##############################
 
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    girf = np.load(filepath + "/girf/girf_10us.npy")
+    girf = np.load(os.path.join(shareFolder, "girf_10us.npy"))
 
     # rotation to phys coord system
     pred_grad = gcs_to_dcs(grad, rot_mat)
@@ -568,9 +561,10 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     # interpolate trajectory to scanner dwelltime
     pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=-1)
     
-    np.save(debugFolder + "/" + "pred_trj.npy", pred_trj)
+    np.save(os.path.join(debugFolder, "pred_trj.npy"), pred_trj)
 
-    # pred_trj = np.load(filepath + "/girf/girf_traj_doublespiral.npy")
+    # pred_trj = np.load(os.path.join(dependFolder, "spiralout_meas.npy")
+    # pred_trj = np.load(os.path.join(dependFolder, "traj_doublespiral_r1_skope.npy")
     # pred_trj = np.transpose(pred_trj, [2, 0, 1])
 
     # now we can switch x and y dir for correct orientation in FIRE
@@ -597,15 +591,20 @@ def sort_spiral_data(group, metadata, dmtx=None):
     rot_mat = calc_rotmat(group[0])
     base_trj = calc_spiral_traj(ncol, rot_mat, metadata.encoding[0])
 
+    acq_key = [None] * nz
     sig = list()
     trj = list()
     enc = list()
-    for acq in group:
+    for key, acq in enumerate(group):
         enc1 = acq.idx.kspace_encode_step_1
         enc2 = acq.idx.kspace_encode_step_2
 
         kz = enc2 - nz//2
         
+        # save one header per partition
+        if acq_key[enc2] is None:
+            acq_key[enc2] = key
+
         enc.append([enc1, enc2])
         
         # update 3D dir.
@@ -623,7 +622,9 @@ def sort_spiral_data(group, metadata, dmtx=None):
         shift = pcs_to_gcs(np.asarray(acq.position), rot_mat)
         sig[-1] = fov_shift_spiral(sig[-1], tmp, shift, nx)
 
-    np.save(debugFolder + "/" + "enc.npy", enc)
+        # we could remove oversampling here (not really necessary after fov shift)
+
+    np.save(os.path.join(debugFolder, "enc.npy"), enc)
     
     # convert lists to numpy arrays
     trj = np.asarray(trj) # current size: (nacq, 3, ncol)
@@ -635,18 +636,31 @@ def sort_spiral_data(group, metadata, dmtx=None):
 
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
     
-    np.save(debugFolder + "/" + "trj.npy", trj)
+    np.save(os.path.join(debugFolder, "trj.npy"), trj)
 
-    return sig, trj
+    return sig, trj, acq_key
 
 
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
-        np.save(debugFolder + "/" + "acs.npy", data)
-        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
+
+        zfill = False
+        # if data.shape[2] < 16: # bart seems to have problems with too few partitions
+        #     zfill = True
+        #     tmp = np.zeros(data[:,:,::2,:].shape, dtype=data.dtype)
+        #     data = np.concatenate((tmp, data, tmp) ,axis=2)
+            
+        print(data.shape)
+        # sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -I', data)  # ESPIRiT calibration
+
+        if zfill:
+            sensmaps = sensmaps[:,:,::2,:]
+
+        np.save(os.path.join(debugFolder, "acs.npy"), data)
+        np.save(os.path.join(debugFolder, "sensmaps.npy"), sensmaps)
         return sensmaps
     else:
         return None
@@ -662,12 +676,16 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     rNy = metadata.encoding[0].reconSpace.matrixSize.y
     rNz = metadata.encoding[0].reconSpace.matrixSize.z
 
-    data, trj = sort_spiral_data(group, metadata, dmtx)
+    FOVz = metadata.encoding[0].encodedSpace.fieldOfView_mm.z
+
+    data, trj, acq_key = sort_spiral_data(group, metadata, dmtx)
 
     logging.debug("Raw data is size %s" % (data.shape,))
     logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
+    logging.debug("OMP_NUM_THREADS set!?: %s" % (os.getenv('OMP_NUM_THREADS'),)) 
+
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
@@ -675,7 +693,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     if sensmaps is None and force_pics:
         sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I -r 32', sensmaps)  # ESPIRiT calibration
+        # sensmaps = bart(1, 'ecalib -m 1 -I -r 32 -k 8', sensmaps)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
@@ -687,6 +706,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
+        # data = bart(1, 'pics -e -i 20 -t', trj, data, sensmaps)
         # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
         data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
         data = np.abs(data)
@@ -699,7 +719,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
 
     logging.debug("Image data is size %s" % (data.shape,))
-    np.save(debugFolder + "/" + "img.npy", data)
+    np.save(os.path.join(debugFolder, "img_%d.npy"%(group[0].idx.repetition)), data)
 
     # Normalize and convert to int16
     # save one scaling in 'static' variable
@@ -720,11 +740,28 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     
     images = []
     n_par = data.shape[-1]
+    logging.debug("data.shape %s" % (data.shape,))
+
+    # Wrong Sequence or Protocol detected, aborting...
+    # Number of slices announced via protocol: 1
+    # Delivered slice index of current MDH: 1 (allowed: 0..0)
+    # Fazit:
+    # image.slice auf partition index setzen bringt nichts
+
+    vol_pos = None
     for par in range(n_par):
         # Format as ISMRMRD image data
-        image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-        image.image_index = par + group[0].idx.repetition * n_par
-        image.slice = par
+        image = ismrmrd.Image.from_array(data[...,par], group[acq_key[par]])
+
+        if n_par>1:
+            if vol_pos is None:
+                vol_pos = image.position[-1]
+            image.image_index = 1 + par
+            image.image_series_index = 1 + group[acq_key[par]].idx.repetition
+            image.position[-1] = vol_pos + (par - n_par//2) * FOVz / rNz # funktioniert, muss aber noch richtig angepasst werden (+vorzeichen check!!!)
+        else:
+            image.image_index = 1 + group[acq_key[par]].idx.repetition
+        
         image.attribute_string = xml
         images.append(image)
 
