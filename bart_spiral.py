@@ -6,10 +6,17 @@ import logging
 import numpy as np
 import numpy.fft as fft
 import base64
+import ctypes
 
 from bart import bart
 import spiraltraj
 from cfft import cfftn, cifftn
+
+
+# Folder for sharing data/debugging
+shareFolder = "/tmp/share"
+debugFolder = os.path.join(shareFolder, "debug")
+dependencyFolder = os.path.join(shareFolder, "dependency")
 
 
 # from ismrmdrdtools (wip: import from ismrmrdtools instead)
@@ -60,11 +67,6 @@ def apply_prewhitening(data, dmtx):
     return np.asarray(np.asmatrix(dmtx)*np.asmatrix(data.reshape(data.shape[0],data.size//data.shape[0]))).reshape(s)
     
 
-# Folder for sharing data/debugging
-shareFolder = "/tmp/share"
-debugFolder = os.path.join(shareFolder, "debug")
-dependFolder = os.path.join(shareFolder, "dependency")
-
 
 def process(connection, config, metadata):
     logging.info("Config: \n%s", config)
@@ -73,8 +75,9 @@ def process(connection, config, metadata):
     # if it failed conversion earlier
 
     try:
-        # logging.info("Metadata: \n%s", metadata.toxml('utf-8'))
-        # logging.info("Metadata: \n%s", metadata.serialize())
+        # Disabled due to incompatibility between PyXB and Python 3.8:
+        # https://github.com/pabigot/pyxb/issues/123
+        # # logging.info("Metadata: \n%s", metadata.toxml('utf-8'))
 
         logging.info("Incoming dataset contains %d encodings", len(metadata.encoding))
         logging.info("First encoding is of type '%s', with a field of view of (%s x %s x %s)mm^3 and a matrix size of (%s x %s x %s)", 
@@ -187,7 +190,6 @@ def process(connection, config, metadata):
                 # run parallel imaging calibration
                 sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
             image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
-            logging.debug("Sending image to client:\n%s", image)
             connection.send_image(image)
             acqGroup = []
 
@@ -535,7 +537,7 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     ## girf trajectory prediction:
     ##############################
 
-    girf = np.load(os.path.join(shareFolder, "girf_10us.npy"))
+    girf = np.load(os.path.join(dependencyFolder, "girf_10us.npy"))
 
     # rotation to phys coord system
     pred_grad = gcs_to_dcs(grad, rot_mat)
@@ -563,8 +565,8 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     
     np.save(os.path.join(debugFolder, "pred_trj.npy"), pred_trj)
 
-    # pred_trj = np.load(os.path.join(dependFolder, "spiralout_meas.npy")
-    # pred_trj = np.load(os.path.join(dependFolder, "traj_doublespiral_r1_skope.npy")
+    # pred_trj = np.load(os.path.join(dependencyFolder, "spiralout_meas.npy")
+    # pred_trj = np.load(os.path.join(dependencyFolder, "traj_doublespiral_r1_skope.npy")
     # pred_trj = np.transpose(pred_trj, [2, 0, 1])
 
     # now we can switch x and y dir for correct orientation in FIRE
@@ -682,7 +684,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     logging.debug("Raw data is size %s" % (data.shape,))
     logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
-    np.save(debugFolder + "/" + "raw.npy", data)
+    np.save(os.path.join(debugFolder, "raw.npy"), data)
     
     logging.debug("OMP_NUM_THREADS set!?: %s" % (os.getenv('OMP_NUM_THREADS'),)) 
 
@@ -735,7 +737,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     meta = ismrmrd.Meta({'DataRole':               'Image',
                          'ImageProcessingHistory': ['FIRE', 'PYTHON'],
                          'WindowCenter':           '16384',
-                         'WindowWidth':            '32768'})
+                         'WindowWidth':            '32768',
+                         'Keep_image_geometry':    1})
     xml = meta.serialize()
     
     images = []
@@ -748,17 +751,21 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     # Fazit:
     # image.slice auf partition index setzen bringt nichts
 
-    vol_pos = None
     for par in range(n_par):
         # Format as ISMRMRD image data
         image = ismrmrd.Image.from_array(data[...,par], group[acq_key[par]])
 
+        image.field_of_view = (ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.x), 
+                               ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.y), 
+                               ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.z))
+
         if n_par>1:
-            if vol_pos is None:
-                vol_pos = image.position[-1]
             image.image_index = 1 + par
             image.image_series_index = 1 + group[acq_key[par]].idx.repetition
-            image.position[-1] = vol_pos + (par - n_par//2) * FOVz / rNz # funktioniert, muss aber noch richtig angepasst werden (+vorzeichen check!!!)
+            image.user_int[0] = par # is this correct??
+            # if vol_pos is None:
+            #     vol_pos = image.position[-1]
+            # image.position[-1] = vol_pos + (par - n_par//2) * FOVz / rNz # funktioniert, muss aber noch richtig angepasst werden (+vorzeichen check!!!)
         else:
             image.image_index = 1 + group[acq_key[par]].idx.repetition
         
