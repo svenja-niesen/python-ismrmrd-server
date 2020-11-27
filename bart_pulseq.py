@@ -327,7 +327,7 @@ def calc_traj(acq, hdr, ncol):
     ##############################
 
     filepath = os.path.dirname(os.path.abspath(__file__))
-    girf = np.load(filepath + "../dependency/girf_10us.npy")
+    girf = np.load(os.path.join(dependencyFolder, "girf_10us.npy"))
 
     # rotation to phys coord system
     grad_phys = gcs_to_dcs(grad, rotmat)
@@ -393,9 +393,11 @@ def grad_pred(grad, girf):
 
 #############################################################
 
-# Folder for debug output files and protocol
-debugFolder = "/tmp/share/debug"
-protFolder = "tmp/share/dependency/pulseq_protocols"
+# Folder for sharing data/debugging
+shareFolder = "/tmp/share"
+debugFolder = os.path.join(shareFolder, "debug")
+dependencyFolder = os.path.join(shareFolder, "dependency")
+protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
 
 def process(connection, config, metadata):
 

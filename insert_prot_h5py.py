@@ -154,7 +154,7 @@ def calc_traj(acq, hdr, ncol):
     ##############################
 
     filepath = os.path.dirname(os.path.abspath(__file__))
-    girf = np.load(filepath + "../dependency/girf_10us.npy")
+    girf = np.load("../dependency/girf_10us.npy")
 
     # rotation to phys coord system
     grad_phys = gcs_to_dcs(grad, rotmat)
