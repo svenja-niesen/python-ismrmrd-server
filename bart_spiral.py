@@ -73,6 +73,10 @@ def process(connection, config, metadata):
 
     # Metadata should be MRD formatted header, but may be a string
     # if it failed conversion earlier
+    
+    # logging.debug("OMP_NUM_THREADS set!?: %s" % (os.getenv('OMP_NUM_THREADS'),)) 
+    # if os.getenv('OMP_NUM_THREADS') is None:
+    #     os.environ["OMP_NUM_THREADS"] = "40"
 
     try:
         # Disabled due to incompatibility between PyXB and Python 3.8:
@@ -493,7 +497,7 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
 
 
     gradshift = 0
-    if spiralType > 2: # for double spiral traj.
+    if spiralType == 3 or spiralType == 5: # for double spiral or RIO traj.
         # prepend gradient dephaser
         deph_ru = 1e-6 * traj_params['dephRampUp']  # s
         deph_ft = 1e-6 * traj_params['dephFlatTop']  # s
@@ -685,13 +689,11 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     logging.debug("Raw data is size %s" % (data.shape,))
     logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(os.path.join(debugFolder, "raw.npy"), data)
-    
-    logging.debug("OMP_NUM_THREADS set!?: %s" % (os.getenv('OMP_NUM_THREADS'),)) 
 
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
-    force_pics = True
+    force_pics = False
     if sensmaps is None and force_pics:
         sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
@@ -708,9 +710,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
-        # data = bart(1, 'pics -e -i 20 -t', trj, data, sensmaps)
-        # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
+        data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
+        # data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
@@ -737,8 +738,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     meta = ismrmrd.Meta({'DataRole':               'Image',
                          'ImageProcessingHistory': ['FIRE', 'PYTHON'],
                          'WindowCenter':           '16384',
-                         'WindowWidth':            '32768',
-                         'Keep_image_geometry':    1})
+                         'WindowWidth':            '32768'})#,
+                        #  'Keep_image_geometry':    1})
     xml = meta.serialize()
     
     images = []
@@ -754,18 +755,21 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     for par in range(n_par):
         # Format as ISMRMRD image data
         image = ismrmrd.Image.from_array(data[...,par], group[acq_key[par]])
-
+        
+        field_of_view_z = FOVz
+        if n_par>1:
+            field_of_view_z /= rNz
+        
         image.field_of_view = (ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.x), 
-                               ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.y), 
-                               ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.z))
+                               ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.x), 
+                               ctypes.c_float(field_of_view_z))
 
         if n_par>1:
-            image.image_index = 1 + par
+            image.image_index = n_par - par
             image.image_series_index = 1 + group[acq_key[par]].idx.repetition
-            image.user_int[0] = par # is this correct??
-            # if vol_pos is None:
-            #     vol_pos = image.position[-1]
-            # image.position[-1] = vol_pos + (par - n_par//2) * FOVz / rNz # funktioniert, muss aber noch richtig angepasst werden (+vorzeichen check!!!)
+            # image.user_int[0] = par # is this correct??
+            # image.user_int[1] = 1 + par # is this correct??
+            image.position[-1] += (n_par//2 - par - 0.5) * FOVz / rNz # funktioniert, muss aber noch richtig angepasst werden (+vorzeichen check!!!)
         else:
             image.image_index = 1 + group[acq_key[par]].idx.repetition
         
