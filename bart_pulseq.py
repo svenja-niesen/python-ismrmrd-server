@@ -398,6 +398,7 @@ shareFolder = "/tmp/share"
 debugFolder = os.path.join(shareFolder, "debug")
 dependencyFolder = os.path.join(shareFolder, "dependency")
 protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
+protFolder_local = "/tmp/local/pulseq_protocols" # ParametersProcessedData mountpoint (not at the scanner)
 
 def process(connection, config, metadata):
 
@@ -407,10 +408,18 @@ def process(connection, config, metadata):
         logging.debug("Created folder " + debugFolder + " for debug output files")
 
     prot_filename = metadata.userParameters.userParameterString[0].value_ # protocol filename from Siemens protocol parameter tFree
-    prot_file = protFolder + "/" + prot_filename
 
-    # insert protocol header
+    # Check if local protocol folder is available - if not use protFolder (scanner)
+    date = prot_filename.split('_')[0] # folder in ParametersProcessedData (=date of seqfile)
+    protFolder_loc = os.path.join(protFolder_local, date)
+    if os.path.exists(protFolder_loc):
+        protFolder = protFolder_loc
+
+    # Insert protocol header
+    prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
+
+
     logging.info("Config: \n%s", config)
 
     # Metadata should be MRD formatted header, but may be a string
