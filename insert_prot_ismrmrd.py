@@ -5,10 +5,7 @@ import argparse
 
 """ function to insert protocol into ismrmrd file
 
-The protocol should be saved as an hdf5 file with groups 'hdr' and 'acquisitions'.
-Protocol data, which contain a single number (e.g dwelltime) are stored as attributes,
-protocol data, which contain arrays (e.g. acquisition data) are stored as datasets.
-
+The protocol should be saved as an ismrmrd file similar to the data file, only containing the protocol and gradient information.
 """
 
 def insert_prot(prot_file, data_file): 
@@ -100,9 +97,10 @@ def insert_prot(prot_file, data_file):
         dset_acq.idx.set = prot_acq.idx.set
         dset_acq.idx.segment = prot_acq.idx.segment
 
-        # calculate trajectory with GIRF prediction
-        dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=dset_acq.number_of_samples, active_channels=dset_acq.active_channels)
-        dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, dset_acq.number_of_samples) # [samples, dims]
+        # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: might have to change this for PowerGrid if it works (maybe concatenate the segmented acquisition?)
+        if acq.idx.segment == 0:
+            dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=dset_acq.number_of_samples, active_channels=dset_acq.active_channels)
+            dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, dset_acq.number_of_samples) # [samples, dims]
 
         dset.write_acquisition(dset_acq, n)
 

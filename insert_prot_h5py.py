@@ -4,7 +4,9 @@ import numpy as np
 import os
 import argparse
 
-""" function to insert protocol into ismrmrd file
+""" DEPRECATED - use insert_prot_ismrmrd.py instead 
+
+function to insert protocol into ismrmrd file
 
 The protocol should be saved as an hdf5 file with groups 'hdr' and 'acquisitions'.
 Protocol data, which contain a single number (e.g dwelltime) are stored as attributes,

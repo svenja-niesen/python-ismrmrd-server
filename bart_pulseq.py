@@ -280,9 +280,10 @@ def insert_acq(prot_file, acq, acq_ctr):
     acq.idx.set = prot_acq.idx.set
     acq.idx.segment = prot_acq.idx.segment
 
-    # calculate trajectory with GIRF prediction
-    acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=acq.number_of_samples, active_channels=acq.active_channels)
-    acq.traj[:] = calc_traj(prot_acq, prot_hdr, acq.number_of_samples) # [samples, dims]
+    # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: might have to change this for PowerGrid if it works
+    if acq.idx.segment == 0:
+        acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=acq.number_of_samples, active_channels=acq.active_channels)
+        acq.traj[:] = calc_traj(prot_acq, prot_hdr, acq.number_of_samples) # [samples, dims]
 
     prot.close()
 
@@ -621,51 +622,45 @@ def sort_spiral_data(group, metadata, dmtx=None):
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
+    traj_dims = group[0].trajectory_dimensions
 
     rotmat = calc_rot_mat(group[0])
-
-    traj_dims = group[0].trajectory_dimensions
-    traj = [np.swapaxes(grp.traj[:],0,1) for grp in group]
-    traj = np.stack(traj) # [intl, dims, samples]
-
-    if traj_dims == 2:
-        traj = np.concatenate((traj, np.zeros([traj.shape[0], 1, traj.shape[2]])), axis=1)
-    
-
-    # switch x and y dir for correct orientation in FIRE
-    traj = traj[:,[1,0,2],:]
 
     sig = list()
     trj = list()
     enc = list()
     for acq in group:
+        
         enc1 = acq.idx.kspace_encode_step_1
         enc2 = acq.idx.kspace_encode_step_2
-
         kz = enc2 - nz//2
-        
         enc.append([enc1, enc2])
         
-        # update 3D dir.
-        if traj_dims == 2:
-            tmp = traj[enc1].copy()
-            tmp[-1] = kz * np.ones(tmp.shape[-1])
-            trj.append(tmp)
-
         # and append data after optional prewhitening
-        if dmtx is None:
+        if dmtx is not None:
+            data = apply_prewhitening(acq.data, dmtx)
+
+        # collect data of ADC segments and take only trajectory from first segment
+        if acq.idx.segment == 0:
             sig.append(acq.data)
+
+            traj = np.swapaxes(acq.traj[:],0,1) # [dims, samples]
+            if traj_dims == 2:
+                traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add 3rd dimension if necessary
+            traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
+            trj.append(traj)
+
         else:
-            sig.append(apply_prewhitening(acq.data, dmtx))
+            sig[-1] = np.concatenate((sig[-1], acq.data), axis=1)
 
         # apply fov shift
         shift = pcs_to_gcs(np.asarray(acq.position), rotmat)
-        sig[-1] = fov_shift_spiral(sig[-1], tmp, shift, nx)
+        sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
     # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
-    trj = np.transpose(trj, [1, 2, 0])
+    trj = np.transpose(trj, [1, 2, 0]) # [dims, samples, intl]
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
 
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
