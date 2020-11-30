@@ -142,7 +142,7 @@ def process(connection, config, metadata):
                     continue
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
-                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], metadata, dmtx)
 
 
                 acqGroup.append(item)
@@ -192,7 +192,7 @@ def process(connection, config, metadata):
             logging.info("Processing a group of k-space data (untriggered)")
             if sensmaps[item.idx.slice] is None:
                 # run parallel imaging calibration
-                sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
+                sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], metadata, dmtx) 
             image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
             connection.send_image(image)
             acqGroup = []
@@ -647,29 +647,33 @@ def sort_spiral_data(group, metadata, dmtx=None):
     return sig, trj, acq_key
 
 
-def process_acs(group, config, metadata, dmtx=None):
-    if len(group)>0:
+def process_acs(group, metadata, dmtx=None):
+
+    if isinstance(group, list) and len(group)>0:  # assume Cartesian reference scan
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
-
-        zfill = False
-        # if data.shape[2] < 16: # bart seems to have problems with too few partitions
-        #     zfill = True
-        #     tmp = np.zeros(data[:,:,::2,:].shape, dtype=data.dtype)
-        #     data = np.concatenate((tmp, data, tmp) ,axis=2)
-            
-        print(data.shape)
-        # sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
-        sensmaps = bart(1, 'ecalib -m 1 -I', data)  # ESPIRiT calibration
-
-        if zfill:
-            sensmaps = sensmaps[:,:,::2,:]
-
-        np.save(os.path.join(debugFolder, "acs.npy"), data)
-        np.save(os.path.join(debugFolder, "sensmaps.npy"), sensmaps)
-        return sensmaps
+    elif isinstance(group, np.ndarray):  # assume that data is already sorted
+        data = group
     else:
         return None
+
+    afy = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
+    afz = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_2
+    caipi_delta = 0  # wip
+
+    if data.shape[2]>1 and not afz>1 and not (afy>1 and caipi_delta!=0):
+        data = cifftn(data.copy(), [2])
+        sensmaps = []
+        for p in range(data.shape[2]):
+            sensmaps.append(bart(1, 'ecalib -m 1 -I', data[:,:,p:p+1,:]))  # ESPIRiT calibration
+        sensmaps = np.asarray(sensmaps)[:,:,:,0,:].transpose([1,2,0,3])
+    else:
+        sensmaps = bart(1, 'ecalib -m 1 -I', data)  # ESPIRiT calibration
+        # sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
+
+    np.save(os.path.join(debugFolder, "acs.npy"), data)
+    np.save(os.path.join(debugFolder, "sensmaps.npy"), sensmaps)
+    return sensmaps
 
 
 def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
@@ -689,37 +693,60 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     logging.debug("Raw data is size %s" % (data.shape,))
     logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(os.path.join(debugFolder, "raw.npy"), data)
+    
+    afy = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
+    afz = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_2
 
-    # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
-        # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
+    userparams = {item.name: item.value_ for item in metadata.userParameters.userParameterLong}
+    caipi_delta = userparams['lReorderingShift']
+    partition_ft_first = (sensmaps is None or (nz>1 and not afz>1 and not (afy>1 and caipi_delta!=0)))
+    force_pics = True
 
-    force_pics = False
-    if sensmaps is None and force_pics:
-        sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
-        sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        # sensmaps = bart(1, 'ecalib -m 1 -I -r 32 -k 8', sensmaps)  # ESPIRiT calibration
-        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
+    if partition_ft_first:
+        # sort data into partitions
+        ctrj = list()
+        cdata = list()
+        for p in range(nz):
+            mask = np.round(trj[2,0,:]+nz//2) == p
+            ctrj.append(trj[:,:,mask].copy())
+            cdata.append(data[:,:,mask,:].copy())
 
-    if sensmaps is None:
-        logging.debug("no pics necessary, just do standard recon")
-            
-        # bart nufft with nominal trajectory
-        data = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
-        # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
+        # perform ft in partition dir
+        cdata = cifftn(np.asarray(cdata), [0])
+        ctrj = np.asarray(ctrj)
+        ctrj[:,2] = 0
+        
+        if nz > rNz:  # remove oversampling in slice direction
+            cdata = cdata[(nz - rNz)//2:-(nz - rNz)//2]
+            ctrj = ctrj[(nz - rNz)//2:-(nz - rNz)//2]
 
-        # Sum of squares coil combination
-        data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
+        # perform recon
+        data = np.zeros([nx, nx, rNz])
+        for p in range(rNz):
+            if sensmaps is None:
+                tmp = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, 1), ctrj[p], cdata[p]) # nufft
+
+                if force_pics:
+                    tmp = cfftn(tmp, [0, 1]) # back to k-space
+                    sensmap = process_acs(tmp, metadata)
+                    data[:,:,p] = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', ctrj[p], cdata[p], sensmap)
+                else:
+                    data[:,:,p] = np.sqrt(np.sum(np.abs(tmp)**2, axis=-1))[:,:,0]        
+            else:
+                data[:,:,p] = abs(bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', ctrj[p], cdata[p], sensmaps[p]))
     else:
-        data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        # data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
-        data = np.abs(data)
+        if sensmaps is None:
+            print('error: acs data missing')
+            raise ValueError
+        data = abs(bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps))
+        # data = abs(bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps))
+
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
             data = data[..., np.newaxis]
-    
-    if nz > rNz:
-        # remove oversampling in slice direction
-        data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
+
+        if nz > rNz:  # remove oversampling in slice direction
+            data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
 
     logging.debug("Image data is size %s" % (data.shape,))
     np.save(os.path.join(debugFolder, "img_%d.npy"%(group[0].idx.repetition)), data)
