@@ -30,6 +30,8 @@ def insert_prot(prot_file, data_file):
     dset_udbl[0].value_ = prot_udbl[0].value_
     dset_udbl[1].name = prot_udbl[1].name # traj_delay (additional delay of trajectory [s])
     dset_udbl[1].value_ = prot_udbl[1].value_
+    dset_udbl[2].name = prot_udbl[2].name # nsegments
+    dset_udbl[2].value_ = prot_udbl[2].value_
 
     dset_e1 = dset_hdr.encoding[0]
     prot_e1 = prot_hdr.encoding[0]
@@ -98,9 +100,12 @@ def insert_prot(prot_file, data_file):
         dset_acq.idx.segment = prot_acq.idx.segment
 
         # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: might have to change this for PowerGrid if it works (maybe concatenate the segmented acquisition?)
-        if acq.idx.segment == 0:
-            dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=dset_acq.number_of_samples, active_channels=dset_acq.active_channels)
-            dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, dset_acq.number_of_samples) # [samples, dims]
+        if dset_acq.idx.segment == 0:
+            nsamples = dset_acq.number_of_samples
+            nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
+            samples = int(nsamples*nsegments+0.5)
+            dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=samples, active_channels=dset_acq.active_channels)
+            dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, samples) # [samples, dims]
 
         dset.write_acquisition(dset_acq, n)
 

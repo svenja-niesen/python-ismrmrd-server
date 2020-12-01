@@ -205,6 +205,8 @@ def insert_hdr(prot_file, metadata):
     dset_udbl[0].value_ = prot_udbl[0].value_
     dset_udbl[1].name = prot_udbl[1].name # traj_delay (additional delay of trajectory [s])
     dset_udbl[1].value_ = prot_udbl[1].value_
+    dset_udbl[2].name = prot_udbl[2].name # nsegments
+    dset_udbl[2].value_ = prot_udbl[2].value_
 
     dset_e1 = metadata.encoding[0]
     prot_e1 = prot_hdr.encoding[0]
@@ -228,7 +230,7 @@ def insert_hdr(prot_file, metadata):
     
     prot.close()
 
-def insert_acq(prot_file, acq, acq_ctr):
+def insert_acq(prot_file, dset_acq, acq_ctr):
 
     #---------------------------
     # Read protocol
@@ -251,39 +253,42 @@ def insert_acq(prot_file, acq, acq_ctr):
     prot_acq = prot.read_acquisition(acq_ctr)
 
     # rotation matrix
-    acq.phase_dir[:] = prot_acq.phase_dir[:]
-    acq.read_dir[:] = prot_acq.read_dir[:]
-    acq.slice_dir[:] = prot_acq.slice_dir[:]
+    dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
+    dset_acq.read_dir[:] = prot_acq.read_dir[:]
+    dset_acq.slice_dir[:] = prot_acq.slice_dir[:]
 
     # flags - WIP: this is not the complete list of flags - if needed, flags can be added
     if prot_acq.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
-        acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+        dset_acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
     if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
-        acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
+        dset_acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
     if prot_acq.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA):
-        acq.setFlag(ismrmrd.ACQ_IS_DUMMYSCAN_DATA)
+        dset_acq.setFlag(ismrmrd.ACQ_IS_DUMMYSCAN_DATA)
     if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
-        acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
+        dset_acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
     if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
-        acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
     if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
-        acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
 
     # encoding counters
-    acq.idx.kspace_encode_step_1 = prot_acq.idx.kspace_encode_step_1
-    acq.idx.kspace_encode_step_2 = prot_acq.idx.kspace_encode_step_2
-    acq.idx.slice = prot_acq.idx.slice
-    acq.idx.contrast = prot_acq.idx.contrast
-    acq.idx.phase = prot_acq.idx.phase
-    acq.idx.average = prot_acq.idx.average
-    acq.idx.repetition = prot_acq.idx.repetition
-    acq.idx.set = prot_acq.idx.set
-    acq.idx.segment = prot_acq.idx.segment
+    dset_acq.idx.kspace_encode_step_1 = prot_acq.idx.kspace_encode_step_1
+    dset_acq.idx.kspace_encode_step_2 = prot_acq.idx.kspace_encode_step_2
+    dset_acq.idx.slice = prot_acq.idx.slice
+    dset_acq.idx.contrast = prot_acq.idx.contrast
+    dset_acq.idx.phase = prot_acq.idx.phase
+    dset_acq.idx.average = prot_acq.idx.average
+    dset_acq.idx.repetition = prot_acq.idx.repetition
+    dset_acq.idx.set = prot_acq.idx.set
+    dset_acq.idx.segment = prot_acq.idx.segment
 
     # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: might have to change this for PowerGrid if it works
-    if acq.idx.segment == 0:
-        acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=acq.number_of_samples, active_channels=acq.active_channels)
-        acq.traj[:] = calc_traj(prot_acq, prot_hdr, acq.number_of_samples) # [samples, dims]
+    if dset_acq.idx.segment == 0:
+        nsamples = dset_acq.number_of_samples
+        nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
+        samples = int(nsamples*nsegments+0.5)
+        dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=samples, active_channels=dset_acq.active_channels)
+        dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, samples) # [samples, dims]
 
     prot.close()
 
