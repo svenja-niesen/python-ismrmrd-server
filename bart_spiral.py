@@ -582,7 +582,7 @@ def calc_spiral_traj(ncol, rot_mat, encoding):
     return pred_trj
 
 
-def sort_spiral_data(group, metadata, dmtx=None):
+def sort_spiral_data(group, metadata, dmtx=None, remove_ro_os=True):
     
     def calc_rotmat(acq):
         phase_dir = np.asarray(acq.phase_dir)
@@ -635,6 +635,11 @@ def sort_spiral_data(group, metadata, dmtx=None):
     # convert lists to numpy arrays
     trj = np.asarray(trj) # current size: (nacq, 3, ncol)
     sig = np.asarray(sig) # current size: (nacq, ncha, ncol)
+
+    if remove_ro_os:
+        # remove os before recon, in order to speed it up (fov shifts have already been applied)
+        sig = remove_os(sig, -1)
+        trj = trj[:,:,::2]
 
     # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
     trj = np.transpose(trj, [1, 2, 0])
@@ -702,6 +707,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     partition_ft_first = (sensmaps is None or (nz>1 and not afz>1 and not (afy>1 and caipi_delta!=0)))
     force_pics = True
 
+
     if partition_ft_first:
         # sort data into partitions
         ctrj = list()
@@ -729,7 +735,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
                 if force_pics:
                     tmp = cfftn(tmp, [0, 1]) # back to k-space
                     sensmap = process_acs(tmp, metadata)
-                    data[:,:,p] = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', ctrj[p], cdata[p], sensmap)
+                    data[:,:,p] = abs(bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', ctrj[p], cdata[p], sensmap))
                 else:
                     data[:,:,p] = np.sqrt(np.sum(np.abs(tmp)**2, axis=-1))[:,:,0]        
             else:
