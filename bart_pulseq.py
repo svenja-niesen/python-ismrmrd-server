@@ -509,6 +509,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
     traj_dims = group[0].trajectory_dimensions
+    res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
 
     rotmat = calc_rot_mat(group[0])
 
@@ -540,7 +541,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
             sig[-1] = np.concatenate((sig[-1], acq.data), axis=1)
 
         # apply fov shift
-        shift = pcs_to_gcs(np.asarray(acq.position), rotmat)
+        shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
         sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
