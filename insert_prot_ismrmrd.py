@@ -53,6 +53,10 @@ def insert_prot(prot_file, data_file):
     dset_e1.reconSpace.fieldOfView_mm.y = prot_e1.reconSpace.fieldOfView_mm.y
     dset_e1.reconSpace.fieldOfView_mm.z = prot_e1.reconSpace.fieldOfView_mm.z
 
+    dset_e1.encodingLimits.slice.minimum = prot_e1.encodingLimits.slice.minimum
+    dset_e1.encodingLimits.slice.maximum = prot_e1.encodingLimits.slice.maximum
+    dset_e1.encodingLimits.slice.center = prot_e1.encodingLimits.slice.center
+
     # write header back to file
     dset.write_xml_header(dset_hdr.toxml())
 
