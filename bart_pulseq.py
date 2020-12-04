@@ -67,13 +67,16 @@ def process(connection, config, metadata):
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
     # Continuously parse incoming data parsed from MRD messages
-    acqGroup = [[] for _ in range(256)]
+    n_slc = metadata.encoding[0].encodingLimits.slice.maximum
+    if n_slc == 0:
+        n_slc = 256 # for compatibility to old sequences
+    
+    acqGroup = [[] for _ in range(n_slc)]
     noiseGroup = []
     waveformGroup = []
 
-    # hard-coded limit of 256 slices (better: use Nslice from protocol)
-    acsGroup = [[] for _ in range(256)]
-    sensmaps = [None] * 256
+    acsGroup = [[] for _ in range(n_slc)]
+    sensmaps = [None] * n_slc
     dmtx = None
 
     try:
@@ -229,7 +232,11 @@ def insert_hdr(prot_file, metadata):
     dset_e1.reconSpace.fieldOfView_mm.x = prot_e1.reconSpace.fieldOfView_mm.x
     dset_e1.reconSpace.fieldOfView_mm.y = prot_e1.reconSpace.fieldOfView_mm.y
     dset_e1.reconSpace.fieldOfView_mm.z = prot_e1.reconSpace.fieldOfView_mm.z
-    
+
+    dset_e1.encodingLimits.slice.minimum = prot_e1.encodingLimits.slice.minimum
+    dset_e1.encodingLimits.slice.maximum = prot_e1.encodingLimits.slice.maximum
+    dset_e1.encodingLimits.slice.center = prot_e1.encodingLimits.slice.center
+
     prot.close()
 
 def insert_acq(prot_file, dset_acq, acq_ctr):
