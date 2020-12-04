@@ -67,7 +67,7 @@ def process(connection, config, metadata):
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
     # Continuously parse incoming data parsed from MRD messages
-    acqGroup = []
+    acqGroup = [[] for _ in range(256)]
     noiseGroup = []
     waveformGroup = []
 
@@ -113,17 +113,22 @@ def process(connection, config, metadata):
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
 
-
-                acqGroup.append(item)
+                if item.idx.segment == 0:
+                    acqGroup[item.idx.slice].append(item)
+                else:
+                    # append data to first segment of ADC group
+                    idx_lower = item.idx.segment * item.number_of_samples
+                    idx_upper = (item.idx.segment+1) * item.number_of_samples
+                    print(acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper].shape)
+                    acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                    images = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
-                    acqGroup = []
 
             # ----------------------------------------------------------
             # Image data messages
@@ -157,15 +162,16 @@ def process(connection, config, metadata):
         # happen if the trigger condition for these groups are not met.
         # This is also a fallback for handling image data, as the last
         # image in a series is typically not separately flagged.
-        if len(acqGroup) > 0:
-            logging.info("Processing a group of k-space data (untriggered)")
-            if sensmaps[item.idx.slice] is None:
-                # run parallel imaging calibration
-                sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
-            image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
-            logging.debug("Sending image to client:\n%s", image)
-            connection.send_image(image)
-            acqGroup = []
+        if item is not None:
+            if len(acqGroup[item.idx.slice]) > 0:
+                logging.info("Processing a group of k-space data (untriggered)")
+                if sensmaps[item.idx.slice] is None:
+                    # run parallel imaging calibration
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
+                image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                logging.debug("Sending image to client:\n%s", image)
+                connection.send_image(image)
+                acqGroup = []
 
     finally:
         connection.send_close()
@@ -479,11 +485,22 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     
     images = []
     n_par = data.shape[-1]
-    for par in range(n_par):
-        # Format as ISMRMRD image data
-        image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-        image.image_index = par + group[0].idx.repetition * n_par
-        image.slice = par
+    n_slc = metadata.encoding[0].encodingLimits.slice.maximum
+
+    # Format as ISMRMRD image data
+    if n_par > 1:
+        for par in range(n_par):
+            image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
+            image.image_index = 1 + par # contains image index (slices/partitions)
+            image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+    else:
+        image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
+        image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
+        image.slice = 0
         image.attribute_string = xml
         images.append(image)
 
@@ -508,6 +525,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
+    nsegments = metadata.userParameters.userParameterDouble[2].value_
     traj_dims = group[0].trajectory_dimensions
     res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
 
@@ -517,39 +535,39 @@ def sort_spiral_data(group, metadata, dmtx=None):
     trj = list()
     enc = list()
     for acq in group:
-        
+
         enc1 = acq.idx.kspace_encode_step_1
         enc2 = acq.idx.kspace_encode_step_2
         kz = enc2 - nz//2
         enc.append([enc1, enc2])
         
-        # and append data after optional prewhitening
-        if dmtx is not None:
-            data = apply_prewhitening(acq.data, dmtx)
-
-        # collect data of ADC segments and take only trajectory from first segment
-        if acq.idx.segment == 0:
+        # append data after optional prewhitening
+        if dmtx is None:
             sig.append(acq.data)
-
-            traj = np.swapaxes(acq.traj[:],0,1) # [dims, samples]
-            if traj_dims == 2:
-                traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add 3rd dimension if necessary
-            traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
-            trj.append(traj)
-
         else:
-            sig[-1] = np.concatenate((sig[-1], acq.data), axis=1)
+            sig.append(apply_prewhitening(acq.data, dmtx))
+
+        # update trajectory
+        traj = np.swapaxes(acq.traj[:],0,1) # [dims, samples]
+        if traj_dims == 2:
+            traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add 3rd dimension if necessary
+        traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
+        trj.append(traj)
 
         # apply fov shift
-        shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
-        sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
+        if acq.idx.segment == nsegments - 1:
+            shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
+            sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
+    # convert lists to numpy arrays
+    trj = np.asarray(trj) # current size: (nacq, 3, ncol)
+    sig = np.asarray(sig) # current size: (nacq, ncha, ncol)
+
     # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
     trj = np.transpose(trj, [1, 2, 0]) # [dims, samples, intl]
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
-
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
     
     np.save(debugFolder + "/" + "trj.npy", trj)
