@@ -69,24 +69,30 @@ def insert_prot(prot_file, data_file):
         prot_acq = prot.read_acquisition(n)
         dset_acq = dset.read_acquisition(n)
 
-        # rotation matrix
-        dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
-        dset_acq.read_dir[:] = prot_acq.read_dir[:]
-        dset_acq.slice_dir[:] = prot_acq.slice_dir[:]
-
         # flags - WIP: this is not the complete list of flags - if needed, flags can be added
         if prot_acq.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
             dset_acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+            prot.close()
+            return
         if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
             dset_acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
+            prot.close()
+            return
         if prot_acq.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA):
             dset_acq.setFlag(ismrmrd.ACQ_IS_DUMMYSCAN_DATA)
+            prot.close()
+            return
         if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
             dset_acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
         if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
             dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
         if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
             dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
+
+        # rotation matrix
+        dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
+        dset_acq.read_dir[:] = prot_acq.read_dir[:]
+        dset_acq.slice_dir[:] = prot_acq.slice_dir[:]
 
         # encoding counters
         dset_acq.idx.kspace_encode_step_1 = prot_acq.idx.kspace_encode_step_1
