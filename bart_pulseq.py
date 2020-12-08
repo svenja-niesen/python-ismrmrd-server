@@ -42,7 +42,11 @@ def process(connection, config, metadata):
     # Insert protocol header
     prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
-
+    
+    # define variables for FOV shift
+    nsegments = metadata.userParameters.userParameterDouble[2].value_
+    matr_sz = metadata.encoding[0].encodedSpace.matrixSize.x
+    res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / matr_sz
 
     logging.info("Config: \n%s", config)
 
@@ -87,8 +91,10 @@ def process(connection, config, metadata):
             # ----------------------------------------------------------
             if isinstance(item, ismrmrd.Acquisition):
 
-                # insert acquisition protocol
-                insert_acq(prot_file, item, acq_ctr)
+                # insert acquisition protocol - base_trj is returned to undo the Pulseq FOV shift and apply FOV shift with predicted trajectory
+                base_trj = insert_acq(prot_file, item, acq_ctr)
+                if base_trj is not None: # for more than one segment
+                    base_trj_ = base_trj.copy()
 
                 # wip: run noise decorrelation
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
@@ -122,8 +128,11 @@ def process(connection, config, metadata):
                     # append data to first segment of ADC group
                     idx_lower = item.idx.segment * item.number_of_samples
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
-                    print(acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper].shape)
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
+
+                if item.idx.segment == nsegments-1:
+                    # undo FOV shift with base_trj and reapply it with pred_trj
+                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(acqGroup[item.idx.slice][-1], base_trj_ ,matr_sz, res)
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
@@ -303,9 +312,15 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
         samples = int(nsamples*nsegments+0.5)
         dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=samples, active_channels=dset_acq.active_channels)
-        dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, samples) # [samples, dims]
+        pred_trj, base_trj = calc_traj(prot_acq, prot_hdr, samples) # [samples, dims]
+        dset_acq.traj[:] = pred_trj.copy()
 
-    prot.close()
+        prot.close()
+        return base_trj
+    
+    else:
+        prot.close()
+        return
 
 def calc_traj(acq, hdr, ncol):
     """ Calculates the kspace trajectory from any gradient using Girf prediction and interpolates it on the adc raster
@@ -313,12 +328,7 @@ def calc_traj(acq, hdr, ncol):
         acq: acquisition from hdf5 protocol file
         hdr: header from hdf5 protocol file
     """
-    def calc_rotmat(acq):
-        phase_dir = np.asarray(acq.phase_dir)
-        read_dir = np.asarray(acq.read_dir)
-        slice_dir = np.asarray(acq.slice_dir)
-        return np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
-
+    
     dt_grad = 10e-6 # [s]
     dt_skope = 1e-6 # [s]
     gammabar = 42.577e6
@@ -329,7 +339,7 @@ def calc_traj(acq, hdr, ncol):
     fov = hdr.encoding[0].reconSpace.fieldOfView_mm.x
     rotmat = calc_rotmat(acq)
     dwelltime = 1e-6 * hdr.userParameters.userParameterDouble[0].value_
-    gradshift = hdr.userParameters.userParameterDouble[1].value_
+    gradshift = hdr.userParameters.userParameterDouble[1].value_ # delay before trajectory begins
 
     # ADC sampling time
     adctime = dwelltime * np.arange(0.5, ncol)
@@ -338,6 +348,9 @@ def calc_traj(acq, hdr, ncol):
     zeros = 10
     grad = np.concatenate((np.zeros([dims,zeros]), grad, np.zeros([dims,zeros])), axis=1)
     gradshift -= zeros*dt_grad
+
+    # time vector for interpolation
+    gradtime = dt_grad * np.arange(grad.shape[-1]) + gradshift
 
     # add z-dir for prediction if necessary
     if dims == 2:
@@ -359,23 +372,27 @@ def calc_traj(acq, hdr, ncol):
     # rotate back to logical system
     pred_grad = dcs_to_gcs(pred_grad, rotmat)
 
-    # time vector for interpolation
-    gradtime = dt_grad * np.arange(pred_grad.shape[-1]) + gradshift
-
     # calculate trajectory 
     pred_trj = np.cumsum(pred_grad.real, axis=1)
+    base_trj = np.cumsum(grad, axis=1)
     gradtime += dt_grad/2 - dt_skope/2 # account for cumsum - WIP: Is the dt_skope/2 delay necessary?? Comnpare to skope trajectory data
 
     # proper scaling - WIP: use BART scaling, is this also the Ismrmrd scaling???
     pred_trj *= dt_grad * gammabar * (1e-3 * fov)
+    base_trj *= dt_grad * gammabar * (1e-3 * fov)
 
     # interpolate trajectory to scanner dwelltime
     pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=1)
-    
+    base_trj = intp_axis(adctime, gradtime, base_trj, axis=1)
+
+    # switch array order to [samples, dims]
+    pred_trj = np.swapaxes(pred_trj,0,1)
+    base_trj = np.swapaxes(base_trj,0,1)
+
     if dims == 2:
-        return np.swapaxes(pred_trj[:2],0,1) # [samples, dims]
+        return pred_trj[:,:2], base_trj[:,:2]
     else:
-        return np.swapaxes(pred_trj,0,1) # [samples, dims]
+        return pred_trj, base_trj
 
 def grad_pred(grad, girf):
     """
@@ -447,7 +464,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     if sensmaps is None and force_pics:
         sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I -r 32', sensmaps)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
@@ -532,7 +549,6 @@ def sort_spiral_data(group, metadata, dmtx=None):
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
-    nsegments = metadata.userParameters.userParameterDouble[2].value_
     traj_dims = group[0].trajectory_dimensions
     res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
 
@@ -561,11 +577,6 @@ def sort_spiral_data(group, metadata, dmtx=None):
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
 
-        # apply fov shift
-        if acq.idx.segment == nsegments - 1:
-            shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
-            sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
-
     np.save(debugFolder + "/" + "enc.npy", enc)
     
     # convert lists to numpy arrays
@@ -573,7 +584,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     sig = np.asarray(sig) # current size: (nacq, ncha, ncol)
 
     # rearrange trj & sig for bart - target size: ??? WIP  --(ncol, enc1_max, nz, nc)
-    trj = np.transpose(trj, [1, 2, 0]) # [dims, samples, intl]
+    trj = np.transpose(trj, [1, 2, 0]) # [3, ncol, nacq]
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
     logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
     
@@ -673,6 +684,11 @@ def calculate_prewhitening(noise, scale_factor=1.0):
 
     return R
 
+def calc_rotmat(acq):
+        phase_dir = np.asarray(acq.phase_dir)
+        read_dir = np.asarray(acq.read_dir)
+        slice_dir = np.asarray(acq.slice_dir)
+        return np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
 
 def remove_os(data, axis=0):
     '''Remove oversampling (assumes os factor 2)
@@ -784,25 +800,6 @@ def dcs_to_gcs(grads, rotmat):
     
     return grads
 
-def fov_shift_spiral(sig, trj, shift, matr_sz):
-    """ 
-    shift field of view of spiral data
-    sig:  rawdata [ncha, nsamples]
-    trj:    trajectory [3, nsamples]
-    # shift:   shift [x_shift, y_shift] in voxel
-    shift:   shift [y_shift, x_shift] in voxel
-    matr_sz: matrix size of reco
-    """
-
-    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
-        # nothing to do
-        return sig
-
-    kmax = int(matr_sz/2+0.5)
-    sig *= np.exp(-1j*(shift[0]*np.pi*trj[0]/kmax-shift[1]*np.pi*trj[1]/kmax))[np.newaxis]
-
-    return sig
-
 def intp_axis(newgrid, oldgrid, data, axis=0):
     # interpolation along an axis (shape of newgrid, oldgrid and data see np.interp)
     tmp = np.moveaxis(data.copy(), axis, 0)
@@ -815,3 +812,33 @@ def intp_axis(newgrid, oldgrid, data, axis=0):
     intp_data = intp_data.reshape(newshape)
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data 
+
+#######################################################################
+# it seems the Pulseq sequence is already applying fov shifts
+def fov_shift_spiral(acq, base_trj, matr_sz, res):
+    """ 
+    shift field of view of spiral data
+    sig:  rawdata [ncha, nsamples]
+    trj:    trajectory [3, nsamples]
+    # shift:   shift [x_shift, y_shift] in voxel
+    shift:   shift [y_shift, x_shift] in voxel
+    matr_sz: matrix size of reco
+    """
+    rotmat = calc_rotmat(acq)
+    shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
+    sig = acq.data[:]
+    pred_trj = acq.traj[:] # [samples, dims]
+
+    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
+        # nothing to do
+        return sig
+
+    kmax = int(matr_sz/2+0.5)
+
+    # undo FOV shift from nominal traj
+    sig *= np.exp(-1j*(shift[0]*np.pi*base_trj[:,0]/kmax-shift[1]*np.pi*base_trj[:,1]/kmax))
+
+    # redo FOV shift with predicted traj
+    sig *= np.exp(1j*(shift[0]*np.pi*pred_trj[:,0]/kmax-shift[1]*np.pi*pred_trj[:,1]/kmax))
+
+    return sig
