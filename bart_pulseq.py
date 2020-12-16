@@ -382,8 +382,8 @@ def calc_traj(acq, hdr, ncol):
     base_trj *= dt_grad * gammabar * (1e-3 * fov)
 
     # interpolate trajectory to scanner dwelltime
-    pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=1)
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=1)
+    pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=1)
 
     # switch array order to [samples, dims]
     pred_trj = np.swapaxes(pred_trj,0,1)
@@ -462,9 +462,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     force_pics = True
     if sensmaps is None and force_pics:
-        sensmaps = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        sensmaps = bart(1, 'nufft -i -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -I -k8', sensmaps)  # ESPIRiT calibration
+        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
@@ -477,7 +478,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
         # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
+        data = bart(1, 'pics -e -l1 -r 0.001 -i 50 -t', trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
@@ -540,19 +541,11 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
 def sort_spiral_data(group, metadata, dmtx=None):
     
-    def calc_rot_mat(acq):
-        phase_dir = np.asarray(acq.phase_dir)
-        read_dir = np.asarray(acq.read_dir)
-        slice_dir = np.asarray(acq.slice_dir)
-        return np.round(np.concatenate([phase_dir[:,np.newaxis], read_dir[:,np.newaxis], slice_dir[:,np.newaxis]], axis=1), 6)
-
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     ncol = group[0].number_of_samples
     traj_dims = group[0].trajectory_dimensions
     res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
-
-    rotmat = calc_rot_mat(group[0])
 
     sig = list()
     trj = list()
@@ -576,6 +569,10 @@ def sort_spiral_data(group, metadata, dmtx=None):
             traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add 3rd dimension if necessary
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
+
+        # manual fov shift
+        # shift = np.array([0, 35, 0])
+        # sig[-1] = fov_shift_spiral_old(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
@@ -813,8 +810,7 @@ def intp_axis(newgrid, oldgrid, data, axis=0):
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data 
 
-#######################################################################
-# it seems the Pulseq sequence is already applying fov shifts
+# it seems the Pulseq sequence is already applying fov shifts so we undo and redo the fov shift
 def fov_shift_spiral(acq, base_trj, matr_sz, res):
     """ 
     shift field of view of spiral data
@@ -840,5 +836,24 @@ def fov_shift_spiral(acq, base_trj, matr_sz, res):
 
     # redo FOV shift with predicted traj
     sig *= np.exp(1j*(shift[0]*np.pi*pred_trj[:,0]/kmax-shift[1]*np.pi*pred_trj[:,1]/kmax))
+
+    return sig
+
+# old fov shift fuction for testing purposes
+def fov_shift_spiral_old(sig, trj, shift, matr_sz):
+    """ 
+    shift field of view of spiral data
+    sig:  rawdata [ncha, nsamples]
+    trj:    trajectory [3, nsamples]
+    # shift:   shift [x_shift, y_shift] in voxel
+    shift:   shift [y_shift, x_shift] in voxel
+    matr_sz: matrix size of reco
+    """
+
+    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
+        # nothing to do
+        return sig
+
+    sig *= np.exp(1j*(-shift[1]*np.pi*trj[0]/matr_sz-shift[0]*np.pi*trj[1]/matr_sz))[np.newaxis]
 
     return sig
