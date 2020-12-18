@@ -6,6 +6,9 @@ import argparse
 """ function to insert protocol into ismrmrd file
 
 The protocol should be saved as an ismrmrd file similar to the data file, only containing the protocol and gradient information.
+
+ToDo: - Undoing FOV shifts with nominal trajectory and applying it with predicted trajectory
+      - concatenate also the samples of segmented ADCs in one acquisition for PowerGrid (if PowerGrid works)
 """
 
 def insert_prot(prot_file, data_file): 
@@ -109,12 +112,16 @@ def insert_prot(prot_file, data_file):
         dset_acq.idx.set = prot_acq.idx.set
         dset_acq.idx.segment = prot_acq.idx.segment
 
-        # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: might have to change this for PowerGrid if it works (maybe concatenate the segmented acquisition?)
+        # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
+        # WIP: better concatenate segmented ADCs to one acquisition here - append segments with idx > 0 to first segment
         if dset_acq.idx.segment == 0:
             nsamples = dset_acq.number_of_samples
             nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
-            samples = int(nsamples*nsegments+0.5)
-            dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=samples, active_channels=dset_acq.active_channels)
+            nsamples_full = int(nsamples*nsegments+0.5)
+            data_tmp = dset_acq.data[:] # save data as it gets corrupted by the resizing
+            dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
+            dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
+        
             dset_acq.traj[:] = calc_traj(prot_acq, prot_hdr, samples) # [samples, dims]
 
         dset.write_acquisition(dset_acq, n)
