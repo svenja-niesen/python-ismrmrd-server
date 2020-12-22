@@ -82,6 +82,7 @@ def process(connection, config, metadata):
     acsGroup = [[] for _ in range(n_slc)]
     sensmaps = [None] * n_slc
     dmtx = None
+    base_trj_ = []
 
     try:
         for acq_ctr, item in enumerate(connection):
@@ -91,10 +92,10 @@ def process(connection, config, metadata):
             # ----------------------------------------------------------
             if isinstance(item, ismrmrd.Acquisition):
 
-                # insert acquisition protocol - base_trj is returned to undo the Pulseq FOV shift and apply FOV shift with predicted trajectory
+                # insert acquisition protocol
                 base_trj = insert_acq(prot_file, item, acq_ctr)
-                if base_trj is not None: # for more than one segment
-                    base_trj_ = base_trj.copy()
+                if base_trj is not None: # save base_trj e.g. for future trajectory comparisons or fov shift (s. below)
+                    base_trj_.append(base_trj)
 
                 # wip: run noise decorrelation
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
@@ -130,9 +131,10 @@ def process(connection, config, metadata):
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
-                if item.idx.segment == nsegments-1:
-                    # undo FOV shift with base_trj and reapply it with pred_trj
-                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(acqGroup[item.idx.slice][-1], base_trj_ ,matr_sz, res)
+                # Pulseqs FOV shift is not working correctly, so we will disable it
+                # undo FOV shift with base_trj and reapply it with pred_trj
+                # if item.idx.segment == nsegments-1:
+                #     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral_reapply(acqGroup[item.idx.slice][-1], base_trj_[-1] ,matr_sz, res)
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
@@ -306,7 +308,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     dset_acq.idx.set = prot_acq.idx.set
     dset_acq.idx.segment = prot_acq.idx.segment
 
-    # calculate trajectory with GIRF prediction - trajectory is stored only in first segment - WIP: better concatenate segmented ADCs in one acquisition already here - input parameter should be a list of all needed acquistions
+    # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
+    # WIP: better concatenate segmented ADCs in one acquisition already here - input parameter should be a list of all needed acquistions
+    # segmented ADC Reko not working at the scanner - maybe resizing of the data is the problem
+    base_trj = None
     if dset_acq.idx.segment == 0:
         nsamples = dset_acq.number_of_samples
         nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
@@ -318,11 +323,9 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         dset_acq.traj[:] = pred_trj.copy()
 
         prot.close()
-        return base_trj
     
-    else:
-        prot.close()
-        return
+    return base_trj
+ 
 
 def calc_traj(acq, hdr, ncol):
     """ Calculates the kspace trajectory from any gradient using Girf prediction and interpolates it on the adc raster
@@ -431,18 +434,6 @@ def grad_pred(grad, girf):
 
     return pred_grad
 
-def process_acs(group, config, metadata, dmtx=None):
-    if len(group)>0:
-        data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
-        data = remove_os(data)
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
-        np.save(debugFolder + "/" + "acs.npy", data)
-        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
-        return sensmaps
-    else:
-        return None
-
-
 def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
@@ -536,6 +527,17 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     return images
 
+def process_acs(group, config, metadata, dmtx=None):
+    if len(group)>0:
+        data = sort_into_kspace(group, metadata, dmtx, zf_around_center=False)
+        data = remove_os(data)
+        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
+        np.save(debugFolder + "/" + "acs.npy", data)
+        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
+        return sensmaps
+    else:
+        return None
+
 # %%
 #########################
 # Sort Data
@@ -548,6 +550,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     ncol = group[0].number_of_samples
     traj_dims = group[0].trajectory_dimensions
     res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
+    rot_mat = calc_rotmat(group[0])
 
     sig = list()
     trj = list()
@@ -572,9 +575,9 @@ def sort_spiral_data(group, metadata, dmtx=None):
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
 
-        # manual fov shift
-        # shift = np.array([0, 35, 0])
-        # sig[-1] = fov_shift_spiral_old(sig[-1], trj[-1], shift, nx)
+        # fov shift
+        shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
+        sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
@@ -812,8 +815,7 @@ def intp_axis(newgrid, oldgrid, data, axis=0):
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data 
 
-# it seems the Pulseq sequence is already applying fov shifts so we undo and redo the fov shift
-def fov_shift_spiral(acq, base_trj, matr_sz, res):
+def fov_shift_spiral(sig, trj, shift, matr_sz):
     """ 
     shift field of view of spiral data
     sig:  rawdata [ncha, nsamples]
@@ -821,6 +823,28 @@ def fov_shift_spiral(acq, base_trj, matr_sz, res):
     # shift:   shift [x_shift, y_shift] in voxel
     shift:   shift [y_shift, x_shift] in voxel
     matr_sz: matrix size of reco
+    """
+
+    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
+        # nothing to do
+        return sig
+
+    kmax = matr_sz/2
+    sig *= np.exp(-1j*(shift[1]*np.pi*trj[0]/kmax+shift[0]*np.pi*trj[1]/kmax))[np.newaxis]
+
+    return sig
+
+# the fov-shift from the Pulseq sequence is not correct,
+# so we will disable that functionality and apply the fov shift manually with the function above
+def fov_shift_spiral_reapply(acq, base_trj, matr_sz, res):
+    """ 
+    shift field of view of spiral data
+    first undo field of view shift with nominal, then reapply with predicted trajectory
+
+    acq: ISMRMRD acquisition
+    base_trj: nominal trajectory
+    matr_sz: matrix size
+    res: resolution 
     """
     rotmat = calc_rotmat(acq)
     shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
@@ -838,24 +862,5 @@ def fov_shift_spiral(acq, base_trj, matr_sz, res):
 
     # redo FOV shift with predicted traj
     sig *= np.exp(1j*(shift[0]*np.pi*pred_trj[:,0]/kmax-shift[1]*np.pi*pred_trj[:,1]/kmax))
-
-    return sig
-
-# old fov shift fuction for testing purposes
-def fov_shift_spiral_old(sig, trj, shift, matr_sz):
-    """ 
-    shift field of view of spiral data
-    sig:  rawdata [ncha, nsamples]
-    trj:    trajectory [3, nsamples]
-    # shift:   shift [x_shift, y_shift] in voxel
-    shift:   shift [y_shift, x_shift] in voxel
-    matr_sz: matrix size of reco
-    """
-
-    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
-        # nothing to do
-        return sig
-
-    sig *= np.exp(1j*(-shift[1]*np.pi*trj[0]/matr_sz-shift[0]*np.pi*trj[1]/matr_sz))[np.newaxis]
 
     return sig
