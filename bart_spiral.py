@@ -381,8 +381,9 @@ def fov_shift_spiral(sig, trj, shift, matr_sz):
     if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
         # nothing to do
         return sig
-
-    sig *= np.exp(1j*(-shift[1]*np.pi*trj[0]/matr_sz-shift[0]*np.pi*trj[1]/matr_sz))[np.newaxis]
+    
+    kmax = matr_sz/2
+    sig *= np.exp(-1j*(shift[1]*np.pi*trj[0]/kmax+shift[0]*np.pi*trj[1]/kmax))[np.newaxis]
 
     return sig
 
@@ -592,6 +593,8 @@ def sort_spiral_data(group, metadata, dmtx=None, remove_ro_os=True):
 
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
+    fov = metadata.encoding[0].reconSpace.fieldOfView_mm.x
+    res = fov/nx
     ncol = group[0].number_of_samples
 
     rot_mat = calc_rotmat(group[0])
@@ -625,7 +628,7 @@ def sort_spiral_data(group, metadata, dmtx=None, remove_ro_os=True):
             sig.append(apply_prewhitening(acq.data, dmtx))
 
         # apply fov shift
-        shift = pcs_to_gcs(np.asarray(acq.position), rot_mat)
+        shift = pcs_to_gcs(np.asarray(acq.position)/res, rot_mat)
         sig[-1] = fov_shift_spiral(sig[-1], tmp, shift, nx)
 
         # we could remove oversampling here (not really necessary after fov shift)
