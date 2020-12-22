@@ -684,7 +684,7 @@ def process_acs(group, metadata, dmtx=None):
     return sensmaps
 
 
-def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
+def process_raw(group, config, metadata, dmtx=None, sensmaps=None, force_pics=True):
 
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     ny = metadata.encoding[0].encodedSpace.matrixSize.y
@@ -708,8 +708,6 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     userparams = {item.name: item.value_ for item in metadata.userParameters.userParameterLong}
     caipi_delta = userparams['lReorderingShift']
     partition_ft_first = (sensmaps is None or (nz>1 and not afz>1 and not (afy>1 and caipi_delta!=0)))
-    force_pics = True
-
 
     if partition_ft_first:
         # sort data into partitions
