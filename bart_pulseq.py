@@ -24,7 +24,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
 
     protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
-    protFolder_local = "/tmp/local/pulseq_protocols" # ParametersProcessedData mountpoint (not at the scanner)
+    protFolder_local = "/tmp/local/pulseq_protocols" # Protocols mountpoint (not at the scanner)
     
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
@@ -71,7 +71,7 @@ def process(connection, config, metadata):
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
     # Continuously parse incoming data parsed from MRD messages
-    n_slc = metadata.encoding[0].encodingLimits.slice.maximum
+    n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
     if n_slc == 0:
         n_slc = 256 # for compatibility to old sequences
     
@@ -272,25 +272,6 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
 
     prot_acq = prot.read_acquisition(acq_ctr)
 
-    # flags - WIP: this is not the complete list of flags - if needed, flags can be added
-    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
-        dset_acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
-        prot.close()
-        return
-    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
-        dset_acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
-        prot.close()
-        return
-    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA):
-        dset_acq.setFlag(ismrmrd.ACQ_IS_DUMMYSCAN_DATA)
-        prot.close()
-        return
-    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
-        dset_acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
-    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
-        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
-    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
-        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
 
     # rotation matrix
     dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
@@ -307,6 +288,28 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     dset_acq.idx.repetition = prot_acq.idx.repetition
     dset_acq.idx.set = prot_acq.idx.set
     dset_acq.idx.segment = prot_acq.idx.segment
+
+    # flags - WIP: this is not the complete list of flags - if needed, flags can be added
+    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
+        dset_acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+        prot.close()
+        return
+    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
+        dset_acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
+        prot.close()
+        return
+    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA):
+        dset_acq.setFlag(ismrmrd.ACQ_IS_DUMMYSCAN_DATA)
+        prot.close()
+        return
+    if prot_acq.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
+        dset_acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
+        prot.close()
+        return
+    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
+    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
 
     # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
     # WIP: better concatenate segmented ADCs in one acquisition already here - input parameter should be a list of all needed acquistions
@@ -455,16 +458,17 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     force_pics = True
     if sensmaps is None and force_pics:
-        sensmaps = bart(1, 'nufft -i -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I -k8', sensmaps)  # ESPIRiT calibration
-        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
+        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
+        if group[0].idx.slice == 0:
+            np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
             
         # bart nufft with nominal trajectory
-        data = bart(1, 'nufft -i -t -c -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        data = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
 
         # Sum of squares coil combination
@@ -482,7 +486,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
 
     logging.debug("Image data is size %s" % (data.shape,))
-    np.save(debugFolder + "/" + "img.npy", data)
+    if group[0].idx.slice == 0:
+        np.save(debugFolder + "/" + "img.npy", data)
 
     # Normalize and convert to int16
     # save one scaling in 'static' variable
@@ -503,7 +508,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     
     images = []
     n_par = data.shape[-1]
-    n_slc = metadata.encoding[0].encodingLimits.slice.maximum
+    n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
 
     # Format as ISMRMRD image data
     if n_par > 1:
@@ -571,7 +576,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
         # update trajectory
         traj = np.swapaxes(acq.traj[:],0,1) # [dims, samples]
         if traj_dims == 2:
-            traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add 3rd dimension if necessary
+            traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add equidistant 3rd dimension if no 3rd dimension provided
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
 
