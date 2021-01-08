@@ -534,8 +534,9 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
-        data = sort_into_kspace(group, metadata, dmtx, zf_around_center=False)
+        data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
+        data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
         sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
