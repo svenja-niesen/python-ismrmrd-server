@@ -823,6 +823,11 @@
                     <name>nsegments</name>
                     <value>1</value>
                 </userParameterDouble>
+                
+                <userParameterDouble>
+                    <name>t_min</name>
+                    <value>0</value>
+                </userParameterDouble>
 
 		<xsl:for-each select="siemens/MEAS/sWipMemBlock/adFree">
 			<xsl:variable name="CurDouble" select="position()"/>
