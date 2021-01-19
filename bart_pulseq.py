@@ -97,7 +97,7 @@ def process(connection, config, metadata):
                 if base_trj is not None: # save base_trj e.g. for future trajectory comparisons or fov shift (s. below)
                     base_trj_.append(base_trj)
 
-                # wip: run noise decorrelation
+                # run noise decorrelation
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
                     noiseGroup.append(item)
                     continue
@@ -131,7 +131,7 @@ def process(connection, config, metadata):
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
-                # Pulseqs FOV shift is not working correctly, so we will disable it
+                # Pulseqs FOV shift is not working correctly, so we will disable it completely
                 # undo FOV shift with base_trj and reapply it with pred_trj
                 # if item.idx.segment == nsegments-1:
                 #     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral_reapply(acqGroup[item.idx.slice][-1], base_trj_[-1] ,matr_sz, res)
@@ -244,9 +244,14 @@ def insert_hdr(prot_file, metadata):
     dset_e1.reconSpace.fieldOfView_mm.y = prot_e1.reconSpace.fieldOfView_mm.y
     dset_e1.reconSpace.fieldOfView_mm.z = prot_e1.reconSpace.fieldOfView_mm.z
 
+    # WIP: add other encoding limits (averages, ...) for PowerGrid here
     dset_e1.encodingLimits.slice.minimum = prot_e1.encodingLimits.slice.minimum
     dset_e1.encodingLimits.slice.maximum = prot_e1.encodingLimits.slice.maximum
     dset_e1.encodingLimits.slice.center = prot_e1.encodingLimits.slice.center
+
+    dset_e1.encodingLimits.kspace_encoding_step_1.minimum = prot_e1.encodingLimits.kspace_encoding_step_1.minimum
+    dset_e1.encodingLimits.kspace_encoding_step_1.maximum = prot_e1.encodingLimits.kspace_encoding_step_1.maximum
+    dset_e1.encodingLimits.kspace_encoding_step_1.center = prot_e1.encodingLimits.kspace_encoding_step_1.center
 
     prot.close()
 
@@ -267,11 +272,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     prot_hdr = ismrmrd.xsd.CreateFromDocument(prot.read_xml_header())
 
     #---------------------------
-    # Process all acquisitions
+    # Process acquisition
     #---------------------------
 
     prot_acq = prot.read_acquisition(acq_ctr)
-
 
     # rotation matrix
     dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
@@ -290,6 +294,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     dset_acq.idx.segment = prot_acq.idx.segment
 
     # flags - WIP: this is not the complete list of flags - if needed, flags can be added
+    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
+    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
+        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
     if prot_acq.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
         dset_acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
         prot.close()
@@ -306,14 +314,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         dset_acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION)
         prot.close()
         return
-    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
-        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
-    if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
-        dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_REPETITION)
 
     # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
-    # WIP: better concatenate segmented ADCs in one acquisition already here - input parameter should be a list of all needed acquistions
-    # segmented ADC Reko not working at the scanner - maybe resizing of the data is the problem
+    # WIP: segmented ADC Reco not working at the scanner - maybe resizing of the data is the problem
+    # better concatenate segmented ADCs in one acquisition already here
     base_trj = None
     if dset_acq.idx.segment == 0:
         nsamples = dset_acq.number_of_samples
@@ -335,6 +339,7 @@ def calc_traj(acq, hdr, ncol):
 
         acq: acquisition from hdf5 protocol file
         hdr: header from hdf5 protocol file
+        ncol: number of samples
     """
     
     dt_grad = 10e-6 # [s]
@@ -383,7 +388,7 @@ def calc_traj(acq, hdr, ncol):
     # calculate trajectory 
     pred_trj = np.cumsum(pred_grad.real, axis=1)
     base_trj = np.cumsum(grad, axis=1)
-    gradtime += dt_grad/2 - dt_skope/2 # account for cumsum - WIP: Is the dt_skope/2 delay necessary?? Comnpare to skope trajectory data
+    gradtime += dt_grad/2 - dt_skope/2 # account for cumsum (assumes rects for integration, we have triangs) - dt_skope/2 seems to be necessary
 
     # proper scaling - WIP: use BART scaling, is this also the Ismrmrd scaling???
     pred_trj *= dt_grad * gammabar * (1e-3 * fov)
@@ -461,8 +466,6 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
         sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
-        if group[0].idx.slice == 0:
-            np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
@@ -481,6 +484,9 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         while np.ndim(data) < 3:
             data = data[..., np.newaxis]
     
+    if group[0].idx.slice == 0 and sensmaps is not None:
+        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
+
     if nz > rNz:
         # remove oversampling in slice direction
         data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
@@ -537,7 +543,7 @@ def process_acs(group, config, metadata, dmtx=None):
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I -r 48', data)  # ESPIRiT calibration
+        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
         return sensmaps
