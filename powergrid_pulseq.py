@@ -7,6 +7,7 @@ import numpy as np
 import base64
 
 from bart import bart
+from PowerGridPy import PowerGridIsmrmrd
 from cfft import cfftn, cifftn
 
 
@@ -20,7 +21,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 ########################
 
 def process(connection, config, metadata):
-  
+    
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
         os.makedirs(debugFolder)
@@ -39,7 +40,26 @@ def process(connection, config, metadata):
     # Insert protocol header
     prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
-    
+
+    # define variables for FOV shift
+    nsegments = metadata.userParameters.userParameterDouble[2].value_
+    matr_sz = metadata.encoding[0].encodedSpace.matrixSize.x
+    res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / matr_sz
+
+    # Write temporary ISMRMRD file for PowerGrid
+    tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
+    if os.path.exists(tmp_file):
+        os.remove(tmp_file)
+    dset_tmp = ismrmrd.Dataset(tmp_file, create_if_needed=True)
+    dset_tmp.write_xml_header(metadata.toxml())
+
+    # Insert Field Map
+    fmap_path = dependencyFolder+"/fmap.npy"
+    if not os.path.exists(fmap_path):
+        raise ValueError("No field map file in dependency folder.")
+    fmap = np.load(fmap_path)
+    dset_tmp.append_array('FieldMap', fmap) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
+
     logging.info("Config: \n%s", config)
 
     # Metadata should be MRD formatted header, but may be a string
@@ -64,7 +84,7 @@ def process(connection, config, metadata):
 
     # Continuously parse incoming data parsed from MRD messages
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
-
+    
     acqGroup = [[] for _ in range(n_slc)]
     noiseGroup = []
     waveformGroup = []
@@ -111,7 +131,10 @@ def process(connection, config, metadata):
                     continue
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
-                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) # [nx,ny,nz,nc]
+
+                # apply noise whitening (can be done before concatenation of segments)
+                item.data[:] = apply_prewhitening(item.data[:], dmtx)
 
                 if item.idx.segment == 0:
                     acqGroup[item.idx.slice].append(item)
@@ -120,12 +143,25 @@ def process(connection, config, metadata):
                     idx_lower = item.idx.segment * item.number_of_samples
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
+                
+                # fov shift - not yet working as scanner fov shift has to be deactivated
+                if item.idx.segment == nsegments - 1:
+                    rotmat = calc_rotmat(item)
+                    shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
+                    unshifted_data = acqGroup[item.idx.slice][-1].data[:]
+                    traj = acqGroup[item.idx.slice][-1].traj[:]
+                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(unshifted_data, traj, shift)
 
-                # When this criteria is met, run process_raw() on the accumulated
-                # data, which returns images that are sent back to the client.
-                if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
+                # if no refscan, calculate sensitivity maps from raw data
+                if sensmaps[item.idx.slice] is None:
+                    if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
+                        sensmaps[item.idx.slice] = sens_from_raw(acqGroup[item.idx.slice])
+
+                # When all acquisitions are processed, write them to file for PowerGrid Reco,
+                # which returns images that are sent back to the client.
+                if item.is_flag_set(ismrmrd.ACQ_LAST_IN_MEASUREMENT):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
+                    images = process_raw(dset_tmp, sensmaps, acqGroup)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -162,15 +198,8 @@ def process(connection, config, metadata):
         # This is also a fallback for handling image data, as the last
         # image in a series is typically not separately flagged.
         if item is not None:
-            if len(acqGroup[item.idx.slice]) > 0:
-                logging.info("Processing a group of k-space data (untriggered)")
-                if sensmaps[item.idx.slice] is None:
-                    # run parallel imaging calibration
-                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
-                image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
-                logging.debug("Sending image to client:\n%s", image)
-                connection.send_image(image)
-                acqGroup = []
+            logging.info("There was untriggered k-space data that will not get processed.")
+            acqGroup = []
 
     finally:
         connection.send_close()
@@ -315,14 +344,22 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
     base_trj = None
     if dset_acq.idx.segment == 0:
+        # some parameters from the header
         nsamples = dset_acq.number_of_samples
         nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
         nsamples_full = int(nsamples*nsegments+0.5)
-        data_tmp = dset_acq.data[:] # save data as it gets corrupted by the resizing, dims are [nc, samples]
-        dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
+        dwelltime = 1e-6*prot_hdr.userParameters.userParameterDouble[0].value_ # [s]
+        t_min = prot_hdr.userParameters.userParameterDouble[3].value_ # [s]
+        t_vec = t_min + dwelltime * np.arange(nsamples_full) # time vector for B0 correction
+
+        # save data as it gets corrupted by the resizing, dims are [nc, samples]
+        data_tmp = dset_acq.data[:] 
+
+        dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
         pred_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
-        dset_acq.traj[:] = pred_trj.copy()
+        dset_acq.traj[:,:3] = pred_trj.copy()
+        dset_acq.traj[:,3] = t_vec
 
         prot.close()
     
@@ -383,7 +420,16 @@ def calc_traj(acq, hdr, ncol):
     # calculate trajectory 
     pred_trj = np.cumsum(pred_grad.real, axis=1)
     base_trj = np.cumsum(grad, axis=1)
-    gradtime += dt_grad/2 - dt_skope/2 # account for cumsum (assumes rects for integration, we have triangs) - dt_skope/2 seems to be necessary
+
+    # set z-axis if trajectory is two-dimensional
+    if dims == 2:
+        nz = hdr.encoding[0].encodedSpace.matrixSize.z
+        partition = acq.idx.kspace_encode_step_2
+        kz = partition - nz//2
+        pred_trj[2] =  kz * np.ones(pred_trj.shape[1])
+
+    # account for cumsum (assumes rects for integration, we have triangs) - dt_skope/2 seems to be necessary
+    gradtime += dt_grad/2 - dt_skope/2
 
     # proper scaling - WIP: use BART scaling, is this also the Ismrmrd scaling???
     pred_trj *= dt_grad * gammabar * (1e-3 * fov)
@@ -437,58 +483,23 @@ def grad_pred(grad, girf):
 
     return pred_grad
 
-def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
+def process_raw(dset_tmp, sensmaps, acqGroup):
 
-    nx = metadata.encoding[0].encodedSpace.matrixSize.x
-    ny = metadata.encoding[0].encodedSpace.matrixSize.y
-    nz = metadata.encoding[0].encodedSpace.matrixSize.z
-    
-    rNx = metadata.encoding[0].reconSpace.matrixSize.x
-    rNy = metadata.encoding[0].reconSpace.matrixSize.y
-    rNz = metadata.encoding[0].reconSpace.matrixSize.z
+    # write sensitivity maps
+    sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
+    dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
-    data, trj = sort_spiral_data(group, metadata, dmtx)
+    # write acquisitions in slice order (might not be chronological, but that makes no difference)
+    for k,slc in enumerate(acqGroup):
+        for j, acq in enumerate(slc):
+            dset_tmp.write_acquisition(acq)
 
-    logging.debug("Raw data is size %s" % (data.shape,))
-    logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
-    np.save(debugFolder + "/" + "raw.npy", data)
-    
-    # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
-        # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
-
-    force_pics = True
-    if sensmaps is None and force_pics:
-        sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
-        sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
-
-    if sensmaps is None:
-        logging.debug("no pics necessary, just do standard recon")
-            
-        # bart nufft with nominal trajectory
-        data = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
-        # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
-
-        # Sum of squares coil combination
-        data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
-    else:
-        # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -e -l1 -r 0.001 -i 50 -t', trj, data, sensmaps)
-        data = np.abs(data)
-        # make sure that data is at least 3d:
-        while np.ndim(data) < 3:
-            data = data[..., np.newaxis]
-    
-    if group[0].idx.slice == 0 and sensmaps is not None:
-        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
-
-    if nz > rNz:
-        # remove oversampling in slice direction
-        data = data[:,:,(nz - rNz)//2:-(nz - rNz)//2]
+    # data should have output [Slice, Phase, Echo, Avg, Rep, Nz, Ny, Nx]
+    data = PowerGridIsmrmrd(inFile=dset_tmp, niter=15, beta=5000, timesegs=7, TSInterp='histo')
+    # change to [Avg, Rep, Phase, Echo, Slice, Nz, Ny, Nx] and average
+    data = np.transpose(data, [3,4,1,2,0,5,6,7]).mean(axis=0)
 
     logging.debug("Image data is size %s" % (data.shape,))
-    if group[0].idx.slice == 0:
-        np.save(debugFolder + "/" + "img.npy", data)
 
     # Normalize and convert to int16
     # save one scaling in 'static' variable
@@ -508,25 +519,19 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     xml = meta.serialize()
     
     images = []
-    n_par = data.shape[-1]
-    n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
 
     # Format as ISMRMRD image data
-    if n_par > 1:
-        for par in range(n_par):
-            image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-            image.image_index = 1 + par # contains image index (slices/partitions)
-            image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
-            image.slice = 0
-            image.attribute_string = xml
-            images.append(image)
-    else:
-        image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
-        image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
-        image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
-        image.slice = 0
-        image.attribute_string = xml
-        images.append(image)
+    for rep in range(data.shape[0]):
+        for phs in range(data.shape[1]):
+            for echo in range(data.shape[2]):
+                for slc in range(data.shape[3]):
+                    for nz in range(data.shape[4]):
+                        image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
+                        image.image_index = 1 + nz*(1+slc) # contains image index (slices/partitions)
+                        image.image_series_index = 1 + echo*(1+phs*(1+rep)) # contains image series index, e.g. different contrasts
+                        image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
+                        image.attribute_string = xml
+                        images.append(image)
 
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
@@ -540,7 +545,6 @@ def process_acs(group, config, metadata, dmtx=None):
 
         # fov shift - not working atm as fov shifts in sequence are not deactivated
         # rotmat = calc_rotmat(group[0])
-        # if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
         # res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
         # shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
         # data = fov_shift(data, shift)
@@ -553,50 +557,37 @@ def process_acs(group, config, metadata, dmtx=None):
     else:
         return None
 
+def sens_from_raw(group, metadata, dmtx):
+    nx = metadata.encoding[0].encodedSpace.matrixSize.x
+    ny = metadata.encoding[0].encodedSpace.matrixSize.y
+    nz = metadata.encoding[0].encodedSpace.matrixSize.z
+    
+    data, trj = sort_spiral_data(group, metadata, dmtx)
+
+    sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+    sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
+    sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
+    return sensmaps
+    
 # %%
 #########################
 # Sort Data
 #########################
 
-def sort_spiral_data(group, metadata, dmtx=None):
-    
-    nx = metadata.encoding[0].encodedSpace.matrixSize.x
-    nz = metadata.encoding[0].encodedSpace.matrixSize.z
-    ncol = group[0].number_of_samples
-    traj_dims = group[0].trajectory_dimensions
-    res = metadata.encoding[0].reconSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
-    rot_mat = calc_rotmat(group[0])
+def sort_spiral_data(group, metadata):
 
     sig = list()
     trj = list()
-    enc = list()
     for acq in group:
 
-        enc1 = acq.idx.kspace_encode_step_1
-        enc2 = acq.idx.kspace_encode_step_2
-        kz = enc2 - nz//2
-        enc.append([enc1, enc2])
-        
-        # append data after optional prewhitening
-        if dmtx is None:
-            sig.append(acq.data)
-        else:
-            sig.append(apply_prewhitening(acq.data, dmtx))
+        # signal - already fov shifted in insert_prot_ismrmrd
+        sig.append(acq.data)
 
-        # update trajectory
-        traj = np.swapaxes(acq.traj[:],0,1) # [dims, samples]
-        if traj_dims == 2:
-            traj = np.concatenate((traj, kz*np.ones([1, traj.shape[1]])), axis=0) # add equidistant 3rd dimension if no 3rd dimension provided
-        traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
+        # trajectory
+        traj = np.swapaxes(acq.traj,0,1)[:3] # [dims, samples]
+        traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation
         trj.append(traj)
-
-        # fov shift - not working atm as fov shifts in sequence are not deactivated
-        # fov shift of reference scan is also missing atm
-        # shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
-        # sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
-
-    np.save(debugFolder + "/" + "enc.npy", enc)
-    
+  
     # convert lists to numpy arrays
     trj = np.asarray(trj) # current size: (nacq, 3, ncol)
     sig = np.asarray(sig) # current size: (nacq, ncha, ncol)
@@ -604,10 +595,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     # rearrange trj & sig for bart
     trj = np.transpose(trj, [1, 2, 0]) # [3, ncol, nacq]
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
-    logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
     
-    np.save(debugFolder + "/" + "trj.npy", trj)
-
     return sig, trj
 
 def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
@@ -830,16 +818,6 @@ def intp_axis(newgrid, oldgrid, data, axis=0):
     intp_data = intp_data.reshape(newshape)
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data 
-
-def fov_shift(sig, shift):
-    """ Performs inplane fov shift for Cartesian data of shape [nx,ny,nz,nc]
-    """
-    fac_x = np.exp(-1j*shift[0]*2*np.pi*np.arange(sig.shape[0])/sig.shape[0])
-    fac_y = np.exp(-1j*shift[1]*2*np.pi*np.arange(sig.shape[1])/sig.shape[1])
-
-    sig *= fac_x[:,np.newaxis,np.newaxis,np.newaxis]
-    sig *= fac_y[:,np.newaxis,np.newaxis]
-    return sig
 
 def fov_shift_spiral(sig, trj, shift, matr_sz):
     """ 

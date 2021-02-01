@@ -93,6 +93,12 @@ class Server:
                 importlib.reload(bart_pulseq)
                 logging.info("Starting bart_pulseq processing based on config")
                 bart_pulseq.process(connection, config, metadata)
+            elif (config == "powergrid_pulseq"):
+                import powergrid_pulseq
+                import importlib
+                importlib.reload(powergrid_pulseq)
+                logging.info("Starting powergrid_pulseq processing based on config")
+                powergrid_pulseq.process(connection, config, metadata)
             elif (config == "invertcontrast"):
                 logging.info("Starting invertcontrast processing based on config")
                 invertcontrast.process(connection, config, metadata)
