@@ -145,12 +145,12 @@ def process(connection, config, metadata):
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
                 
                 # fov shift - not yet working as scanner fov shift has to be deactivated
-                if item.idx.segment == nsegments - 1:
-                    rotmat = calc_rotmat(item)
-                    shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
-                    unshifted_data = acqGroup[item.idx.slice][-1].data[:]
-                    traj = acqGroup[item.idx.slice][-1].traj[:]
-                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(unshifted_data, traj, shift)
+                # if item.idx.segment == nsegments - 1:
+                #     rotmat = calc_rotmat(item)
+                #     shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
+                #     unshifted_data = acqGroup[item.idx.slice][-1].data[:]
+                #     traj = acqGroup[item.idx.slice][-1].traj[:]
+                #     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(unshifted_data, traj, shift, matr_sz)
 
                 # if no refscan, calculate sensitivity maps from raw data
                 if sensmaps[item.idx.slice] is None:
@@ -443,10 +443,7 @@ def calc_traj(acq, hdr, ncol):
     pred_trj = np.swapaxes(pred_trj,0,1)
     base_trj = np.swapaxes(base_trj,0,1)
 
-    if dims == 2:
-        return pred_trj[:,:2], base_trj[:,:2]
-    else:
-        return pred_trj, base_trj
+    return pred_trj, base_trj
 
 def grad_pred(grad, girf):
     """
@@ -490,12 +487,15 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
     dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
     # write acquisitions in slice order (might not be chronological, but that makes no difference)
-    for k,slc in enumerate(acqGroup):
+    for k, slc in enumerate(acqGroup):
         for j, acq in enumerate(slc):
-            dset_tmp.write_acquisition(acq)
+            dset_tmp.append_acquisition(acq)
 
+    dset_tmp.close()
+    # process with PowerGrid
+    tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
+    data = PowerGridIsmrmrd(inFile=tmp_file, niter=15, beta=5000, timesegs=7, TSInterp='histo')
     # data should have output [Slice, Phase, Echo, Avg, Rep, Nz, Ny, Nx]
-    data = PowerGridIsmrmrd(inFile=dset_tmp, niter=15, beta=5000, timesegs=7, TSInterp='histo')
     # change to [Avg, Rep, Phase, Echo, Slice, Nz, Ny, Nx] and average
     data = np.transpose(data, [3,4,1,2,0,5,6,7]).mean(axis=0)
 
@@ -527,8 +527,8 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
                 for slc in range(data.shape[3]):
                     for nz in range(data.shape[4]):
                         image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
-                        image.image_index = 1 + nz*(1+slc) # contains image index (slices/partitions)
-                        image.image_series_index = 1 + echo*(1+phs*(1+rep)) # contains image series index, e.g. different contrasts
+                        image.image_index = 1 + slc*data.shape[4] + nz # contains image index (slices/partitions)
+                        image.image_series_index = 1 + rep*data.shape[1]*data.shape[2] + phs*data.shape[2] + echo # contains image series index, e.g. different contrasts
                         image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
                         image.attribute_string = xml
                         images.append(image)
