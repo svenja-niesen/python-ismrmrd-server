@@ -7,7 +7,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt-get update --quiet \
     && apt-get install --no-install-recommends --no-install-suggests --yes \
-       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev 
+       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev libsuperlu5 pybind11-dev
 
 
 # install mkl
@@ -67,15 +67,22 @@ RUN  cd /opt/code \
      # && echo ENABLE_MEM_CFL=1 >> Makefile.local \
      # && echo ISMRMRD=1 > Makefile.local \
      # && export ISMRMRD_HOME=/usr/local \
-       
 
-# RUN  cd /opt/code \
-#      && git clone https://github.com/mrfil/PowerGrid.git \
-#      && cd PowerGrid \
-#      && mkdir build && cd build \
-#      && apt install --no-install-recommends --no-install-suggests --yes libarmadillo-dev \
-#      && cmake -DOPENACC_GPU=OFF .. \
-#      && make -j $(nproc)
+# Armadillo for PowerGrid
+RUN  cd /opt/code \
+     && git clone https://gitlab.com/conradsnicta/armadillo-code \
+     && cd armadillo-code \
+     && git checkout 8.600.x \
+     && mkdir build && cd build \
+     && cmake .. \
+     && make -j $(nproc) \
+     && make install
+
+RUN  cd /opt/code \
+     && git clone https://github.com/mavel101/PowerGrid \
+     && cd /opt/code/PowerGrid \
+     && git checkout icefire \
+     && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
 FROM ubuntu:20.04
@@ -89,6 +96,11 @@ COPY --from=mrd_converter /usr/local/lib/libismrmrd*        /usr/local/lib/
 COPY --from=mrd_converter /usr/local/bin/siemens_to_ismrmrd /usr/local/bin/siemens_to_ismrmrd
 COPY --from=mrd_converter /usr/local/bin/bart /usr/local/bin/bart
 COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
+COPY --from=mrd_converter /usr/include/armadillo_bits       /usr/include/armadillo_bits
+COPY --from=mrd_converter /usr/include/armadillo            /usr/include/armadillo
+COPY --from=mrd_converter /usr/lib/x86_64-linux-gnu/libarmadillo* /usr/lib/x86_64-linux-gnu/
+COPY --from=mrd_converter /usr/lib/x86_64-linux-gnu/pkgconfig/armadillo.pc /usr/lib/x86_64-linux-gnu/pkgconfig/armadillo.pc
+COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
@@ -120,6 +132,12 @@ RUN  apt-get update --quiet \
      && pip3 install --no-cache-dir pyxb h5py
 
 RUN  mkdir -p /opt/code
+
+# PowerGrid
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.8/dist-packages:${LD_LIBRARY_PATH}"
+RUN  cd /opt/code \
+     && pip3 install PowerGridPy* \
+     && rm PowerGrid*
 
 RUN  cd /opt/code \
      && pip3 install SpiralTraj* \
