@@ -4,11 +4,9 @@ import os
 import itertools
 import logging
 import numpy as np
-import numpy.fft as fft
 import base64
 
 from bart import bart
-import spiraltraj
 from cfft import cfftn, cifftn
 
 
@@ -22,15 +20,14 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 ########################
 
 def process(connection, config, metadata):
-
-    protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
-    protFolder_local = "/tmp/local/pulseq_protocols" # Protocols mountpoint (not at the scanner)
-    
+  
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
         os.makedirs(debugFolder)
         logging.debug("Created folder " + debugFolder + " for debug output files")
 
+    protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
+    protFolder_local = "/tmp/local/pulseq_protocols" # Protocols mountpoint (not at the scanner)
     prot_filename = metadata.userParameters.userParameterString[0].value_ # protocol filename from Siemens protocol parameter tFree
 
     # Check if local protocol folder is available - if not use protFolder (scanner)
@@ -43,11 +40,6 @@ def process(connection, config, metadata):
     prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
     
-    # define variables for FOV shift
-    nsegments = metadata.userParameters.userParameterDouble[2].value_
-    matr_sz = metadata.encoding[0].encodedSpace.matrixSize.x
-    res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / matr_sz
-
     logging.info("Config: \n%s", config)
 
     # Metadata should be MRD formatted header, but may be a string
@@ -130,11 +122,6 @@ def process(connection, config, metadata):
                     idx_lower = item.idx.segment * item.number_of_samples
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
-
-                # Pulseqs FOV shift is not working correctly, so we will disable it completely
-                # undo FOV shift with base_trj and reapply it with pred_trj
-                # if item.idx.segment == nsegments-1:
-                #     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral_reapply(acqGroup[item.idx.slice][-1], base_trj_[-1] ,matr_sz, res)
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
@@ -244,14 +231,26 @@ def insert_hdr(prot_file, metadata):
     dset_e1.reconSpace.fieldOfView_mm.y = prot_e1.reconSpace.fieldOfView_mm.y
     dset_e1.reconSpace.fieldOfView_mm.z = prot_e1.reconSpace.fieldOfView_mm.z
 
-    # WIP: add other encoding limits (averages, ...) for PowerGrid here
     dset_e1.encodingLimits.slice.minimum = prot_e1.encodingLimits.slice.minimum
     dset_e1.encodingLimits.slice.maximum = prot_e1.encodingLimits.slice.maximum
     dset_e1.encodingLimits.slice.center = prot_e1.encodingLimits.slice.center
 
-    dset_e1.encodingLimits.kspace_encoding_step_1.minimum = prot_e1.encodingLimits.kspace_encoding_step_1.minimum
-    dset_e1.encodingLimits.kspace_encoding_step_1.maximum = prot_e1.encodingLimits.kspace_encoding_step_1.maximum
-    dset_e1.encodingLimits.kspace_encoding_step_1.center = prot_e1.encodingLimits.kspace_encoding_step_1.center
+    if prot_e1.encodingLimits.kspace_encoding_step_1 is not None:
+        dset_e1.encodingLimits.kspace_encoding_step_1.minimum = prot_e1.encodingLimits.kspace_encoding_step_1.minimum
+        dset_e1.encodingLimits.kspace_encoding_step_1.maximum = prot_e1.encodingLimits.kspace_encoding_step_1.maximum
+        dset_e1.encodingLimits.kspace_encoding_step_1.center = prot_e1.encodingLimits.kspace_encoding_step_1.center
+    if prot_e1.encodingLimits.average is not None:
+        dset_e1.encodingLimits.average.minimum = prot_e1.encodingLimits.average.minimum
+        dset_e1.encodingLimits.average.maximum = prot_e1.encodingLimits.average.maximum
+        dset_e1.encodingLimits.average.center = prot_e1.encodingLimits.average.center
+    if prot_e1.encodingLimits.phase is not None:
+        dset_e1.encodingLimits.phase.minimum = prot_e1.encodingLimits.phase.minimum
+        dset_e1.encodingLimits.phase.maximum = prot_e1.encodingLimits.phase.maximum
+        dset_e1.encodingLimits.phase.center = prot_e1.encodingLimits.phase.center
+    if prot_e1.encodingLimits.contrast is not None:
+        dset_e1.encodingLimits.contrast.minimum = prot_e1.encodingLimits.contrast.minimum
+        dset_e1.encodingLimits.contrast.maximum = prot_e1.encodingLimits.contrast.maximum
+        dset_e1.encodingLimits.contrast.center = prot_e1.encodingLimits.contrast.center
 
     prot.close()
 
@@ -316,14 +315,12 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         return
 
     # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
-    # WIP: segmented ADC Reco not working at the scanner - maybe resizing of the data is the problem
-    # better concatenate segmented ADCs in one acquisition already here
     base_trj = None
     if dset_acq.idx.segment == 0:
         nsamples = dset_acq.number_of_samples
         nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
         nsamples_full = int(nsamples*nsegments+0.5)
-        data_tmp = dset_acq.data[:] # save data as it gets corrupted by the resizing
+        data_tmp = dset_acq.data[:] # save data as it gets corrupted by the resizing, dims are [nc, samples]
         dset_acq.resize(trajectory_dimensions=prot_acq.trajectory_dimensions, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
         pred_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
@@ -587,9 +584,11 @@ def sort_spiral_data(group, metadata, dmtx=None):
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
 
-        # fov shift
-        shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
-        sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
+        # fov shift - not working atm as fov shifts in sequence are not deactivated
+        # fov shift of reference scan is also missing atm
+        
+        # shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
+        # sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
@@ -846,8 +845,8 @@ def fov_shift_spiral(sig, trj, shift, matr_sz):
 
     return sig
 
-# the fov-shift from the Pulseq sequence is not correct,
-# so we will disable that functionality and apply the fov shift manually with the function above
+# the fov-shift from the Pulseq sequence is not correct 
+# tried to reapply it with the predicted trajectory, but also doesnt work properly
 def fov_shift_spiral_reapply(acq, base_trj, matr_sz, res):
     """ 
     shift field of view of spiral data
