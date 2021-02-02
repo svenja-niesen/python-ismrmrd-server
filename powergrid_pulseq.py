@@ -490,11 +490,15 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
     for k, slc in enumerate(acqGroup):
         for j, acq in enumerate(slc):
             dset_tmp.append_acquisition(acq)
-
     dset_tmp.close()
+
     # process with PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
-    data = PowerGridIsmrmrd(inFile=tmp_file, niter=15, beta=5000, timesegs=7, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debugFolder+"/powergrid_tmp_img", niter=15, beta=5000, timesegs=7, TSInterp='histo')
+    shapes = data["shapes"] 
+    data = np.asarray(data["img_data"]).reshape(shapes)
+    data = np.abs(data)
+
     # data should have output [Slice, Phase, Echo, Avg, Rep, Nz, Ny, Nx]
     # change to [Avg, Rep, Phase, Echo, Slice, Nz, Ny, Nx] and average
     data = np.transpose(data, [3,4,1,2,0,5,6,7]).mean(axis=0)
