@@ -494,7 +494,10 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
 
     # process with PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debugFolder+"/powergrid_tmp_img", niter=15, beta=5000, timesegs=7, TSInterp='histo')
+    debug_pg = debugFolder+"/powergrid_tmp"
+    if not os.path.exists(debug_pg):
+        os.makedirs(debug_pg)
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", niter=15, beta=0, timesegs=7, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
