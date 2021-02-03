@@ -151,7 +151,6 @@ def process(connection, config, metadata):
                     data = acqGroup[item.idx.slice][-1].data[:]
                     traj = np.swapaxes(acqGroup[item.idx.slice][-1].traj[:,:3],0,1)
                     traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation
-                    shift=[0,10,0]
                     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(data, traj, shift, matr_sz)
 
                 # if no refscan, calculate sensitivity maps from raw data
@@ -557,7 +556,6 @@ def process_acs(group, config, metadata, dmtx=None):
         if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
         res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
         shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
-        shift=[0,10,0]
         data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
