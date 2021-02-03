@@ -144,13 +144,15 @@ def process(connection, config, metadata):
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
                 
-                # fov shift - not yet working as scanner fov shift has to be deactivated
-                # if item.idx.segment == nsegments - 1:
-                #     rotmat = calc_rotmat(item)
-                #     shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
-                #     unshifted_data = acqGroup[item.idx.slice][-1].data[:]
-                #     traj = acqGroup[item.idx.slice][-1].traj[:]
-                #     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(unshifted_data, traj, shift, matr_sz)
+                # fov shift
+                if item.idx.segment == nsegments - 1:
+                    rotmat = calc_rotmat(item)
+                    shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
+                    data = acqGroup[item.idx.slice][-1].data[:]
+                    traj = np.swapaxes(acqGroup[item.idx.slice][-1].traj[:,:3],0,1)
+                    traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation
+                    shift=[0,10,0]
+                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(data, traj, shift, matr_sz)
 
                 # if no refscan, calculate sensitivity maps from raw data
                 if sensmaps[item.idx.slice] is None:
@@ -497,7 +499,7 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", niter=15, beta=0, timesegs=7, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", niter=15, beta=0, timesegs=5, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -550,11 +552,13 @@ def process_acs(group, config, metadata, dmtx=None):
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
 
-        # fov shift - not working atm as fov shifts in sequence are not deactivated
-        # rotmat = calc_rotmat(group[0])
-        # res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
-        # shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
-        # data = fov_shift(data, shift)
+        # fov shift
+        rotmat = calc_rotmat(group[0])
+        if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
+        res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
+        shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
+        shift=[0,10,0]
+        data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
         sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
@@ -825,6 +829,16 @@ def intp_axis(newgrid, oldgrid, data, axis=0):
     intp_data = intp_data.reshape(newshape)
     intp_data = np.moveaxis(intp_data, 0, axis)
     return intp_data 
+
+def fov_shift(sig, shift):
+    """ Performs inplane fov shift for Cartesian data of shape [nx,ny,nz,nc]
+    """
+    fac_x = np.exp(-1j*shift[0]*2*np.pi*np.arange(sig.shape[0])/sig.shape[0])
+    fac_y = np.exp(-1j*shift[1]*2*np.pi*np.arange(sig.shape[1])/sig.shape[1])
+
+    sig *= fac_x[:,np.newaxis,np.newaxis,np.newaxis]
+    sig *= fac_y[:,np.newaxis,np.newaxis]
+    return sig
 
 def fov_shift_spiral(sig, trj, shift, matr_sz):
     """ 

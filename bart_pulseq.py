@@ -538,12 +538,12 @@ def process_acs(group, config, metadata, dmtx=None):
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
 
-        # fov shift - not working atm as fov shifts in sequence are not deactivated
-        # rotmat = calc_rotmat(group[0])
-        # if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
-        # res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
-        # shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
-        # data = fov_shift(data, shift)
+        # fov shift
+        rotmat = calc_rotmat(group[0])
+        if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
+        res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
+        shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
+        data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
         sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
@@ -590,10 +590,9 @@ def sort_spiral_data(group, metadata, dmtx=None):
         traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation in FIRE
         trj.append(traj)
 
-        # fov shift - not working atm as fov shifts in sequence are not deactivated
-        # fov shift of reference scan is also missing atm
-        # shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
-        # sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
+        # fov shift
+        shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
+        sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
 
     np.save(debugFolder + "/" + "enc.npy", enc)
     
