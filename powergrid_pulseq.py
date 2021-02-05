@@ -54,11 +54,14 @@ def process(connection, config, metadata):
     dset_tmp.write_xml_header(metadata.toxml())
 
     # Insert Field Map
-    fmap_path = dependencyFolder+"/fmap.npy"
+    fmap_path = dependencyFolder+"/fmap.npz"
     if not os.path.exists(fmap_path):
-        raise ValueError("No field map file in dependency folder.")
-    fmap = np.load(fmap_path)
-    dset_tmp.append_array('FieldMap', fmap) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
+        raise ValueError("No field map file in dependency folder. Field map should be .npz file containing the field map and field map regularisation parameters")
+    fmap = np.load(fmap_path, allow_pickle=True)
+
+    print("Field Map name:", fmap['name'].item())
+    print("Field Map regularisation parameters:",  fmap['params'].item())
+    dset_tmp.append_array('FieldMap', fmap['fmap']) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
 
     logging.info("Config: \n%s", config)
 
@@ -133,9 +136,6 @@ def process(connection, config, metadata):
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) # [nx,ny,nz,nc]
 
-                # apply noise whitening (can be done before concatenation of segments)
-                item.data[:] = apply_prewhitening(item.data[:], dmtx)
-
                 if item.idx.segment == 0:
                     acqGroup[item.idx.slice].append(item)
                 else:
@@ -144,11 +144,14 @@ def process(connection, config, metadata):
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
                 
-                # fov shift
+                # fov shift and noise whitening
                 if item.idx.segment == nsegments - 1:
                     rotmat = calc_rotmat(item)
                     shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
-                    data = acqGroup[item.idx.slice][-1].data[:]
+                    if dmtx is None:
+                        data = acqGroup[item.idx.slice][-1].data[:]
+                    else:
+                        data = apply_prewhitening(acqGroup[item.idx.slice][-1].data[:], dmtx)
                     traj = np.swapaxes(acqGroup[item.idx.slice][-1].traj[:,:3],0,1)
                     traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation
                     acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(data, traj, shift, matr_sz)
