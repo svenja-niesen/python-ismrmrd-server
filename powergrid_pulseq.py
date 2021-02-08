@@ -46,23 +46,6 @@ def process(connection, config, metadata):
     matr_sz = metadata.encoding[0].encodedSpace.matrixSize.x
     res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / matr_sz
 
-    # Write temporary ISMRMRD file for PowerGrid
-    tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
-    if os.path.exists(tmp_file):
-        os.remove(tmp_file)
-    dset_tmp = ismrmrd.Dataset(tmp_file, create_if_needed=True)
-    dset_tmp.write_xml_header(metadata.toxml())
-
-    # Insert Field Map
-    fmap_path = dependencyFolder+"/fmap.npz"
-    if not os.path.exists(fmap_path):
-        raise ValueError("No field map file in dependency folder. Field map should be .npz file containing the field map and field map regularisation parameters")
-    fmap = np.load(fmap_path, allow_pickle=True)
-
-    print("Field Map name:", fmap['name'].item())
-    print("Field Map regularisation parameters:",  fmap['params'].item())
-    dset_tmp.append_array('FieldMap', fmap['fmap']) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
-
     logging.info("Config: \n%s", config)
 
     # Metadata should be MRD formatted header, but may be a string
@@ -165,7 +148,7 @@ def process(connection, config, metadata):
                 # which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_MEASUREMENT):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(dset_tmp, sensmaps, acqGroup)
+                    images = process_raw(acqGroup, metadata, sensmaps)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -484,19 +467,39 @@ def grad_pred(grad, girf):
 
     return pred_grad
 
-def process_raw(dset_tmp, sensmaps, acqGroup):
+def process_raw(acqGroup, metadata, sensmaps):
 
-    # write sensitivity maps
+    # Write ISMRMRD file for PowerGrid
+    tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
+    if os.path.exists(tmp_file):
+        os.remove(tmp_file)
+    dset_tmp = ismrmrd.Dataset(tmp_file, create_if_needed=True)
+    os.chmod(tmp_file, 0o777) # otherwise file is not readable outside container
+
+    # Write header
+    dset_tmp.write_xml_header(metadata.toxml())
+
+    # Insert Field Map
+    fmap_path = dependencyFolder+"/fmap.npz"
+    if not os.path.exists(fmap_path):
+        raise ValueError("No field map file in dependency folder. Field map should be .npz file containing the field map and field map regularisation parameters")
+    fmap = np.load(fmap_path, allow_pickle=True)
+
+    print("Field Map name:", fmap['name'].item())
+    print("Field Map regularisation parameters:",  fmap['params'].item())
+    dset_tmp.append_array('FieldMap', fmap['fmap']) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
+
+    # Insert Sensitivity Maps
     sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
     dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
-    # write acquisitions in slice order (might not be chronological, but that makes no difference)
+    # Insert acquisitions
     for k, slc in enumerate(acqGroup):
         for j, acq in enumerate(slc):
-            dset_tmp.append_acquisition(acq)
+                dset_tmp.append_acquisition(acq)
     dset_tmp.close()
 
-    # process with PowerGrid
+    # Process with PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
@@ -506,9 +509,9 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
 
-    # data should have output [Slice, Phase, Echo, Avg, Rep, Nz, Ny, Nx]
-    # change to [Avg, Rep, Phase, Echo, Slice, Nz, Ny, Nx] and average
-    data = np.transpose(data, [3,4,1,2,0,5,6,7]).mean(axis=0)
+    # data should have output [Slice, Phase, Echo/Contrast, Avg, Rep, Nz, Ny, Nx]
+    # change to [Avg, Rep, Echo/Contrast, Phase, Slice, Nz, Ny, Nx] and average
+    data = np.transpose(data, [3,4,2,1,0,5,6,7]).mean(axis=0)
 
     logging.debug("Image data is size %s" % (data.shape,))
 
@@ -530,19 +533,33 @@ def process_raw(dset_tmp, sensmaps, acqGroup):
     xml = meta.serialize()
     
     images = []
+    dsets = []
 
-    # Format as ISMRMRD image data
-    for rep in range(data.shape[0]):
-        for phs in range(data.shape[1]):
-            for echo in range(data.shape[2]):
-                for slc in range(data.shape[3]):
-                    for nz in range(data.shape[4]):
-                        image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
-                        image.image_index = 1 + slc*data.shape[4] + nz # contains image index (slices/partitions)
-                        image.image_series_index = 1 + rep*data.shape[1]*data.shape[2] + phs*data.shape[2] + echo # contains image series index, e.g. different contrasts
-                        image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
-                        image.attribute_string = xml
-                        images.append(image)
+    # If we have a diffusion dataset, b-value and direction contrasts are stored in contrast index
+    # as otherwise we run into problems with the PowerGrid acquisition tracking.
+    # We now (in case of diffusion imaging) split the b=0 image from other images and reshape to b-values and directions
+    bval = metadata.encoding[0].encodingLimits.contrast.center # number of b-values (incl b=0)
+    dirs = metadata.encoding[0].encodingLimits.phase.center # number of directions
+    if bval > 0:
+        shp = data.shape
+        dsets.append(np.expand_dims(data[:,0], 1))
+        dsets.append(data[:,1:].reshape(shp[0], bval-1, dirs, shp[3], shp[4], shp[5], shp[6]))
+    else:
+        dsets.append(data)
+
+    for data in dsets:
+        # Format as ISMRMRD image data
+        for rep in range(data.shape[0]):
+            for phs in range(data.shape[1]):
+                for echo in range(data.shape[2]):
+                    for slc in range(data.shape[3]):
+                        for nz in range(data.shape[4]):
+                            image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
+                            image.image_index = 1 + slc*data.shape[4] + nz # contains image index (slices/partitions)
+                            image.image_series_index = 1 + rep*data.shape[1]*data.shape[2] + phs*data.shape[2] + echo # contains image series index, e.g. different contrasts
+                            image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
+                            image.attribute_string = xml
+                            images.append(image)
 
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
