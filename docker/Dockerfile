@@ -146,6 +146,7 @@ RUN  cd /opt/code \
 RUN  cd /opt/code \
      && git clone https://github.com/ismrmrd/ismrmrd-python.git \
      && cd /opt/code/ismrmrd-python \
+     && git checkout 80fecd0 \
      && python3 setup.py install
 
 RUN  cd /opt/code \
