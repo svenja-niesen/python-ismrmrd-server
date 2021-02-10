@@ -469,6 +469,9 @@ def grad_pred(grad, girf):
 
 def process_raw(acqGroup, metadata, sensmaps):
 
+    # Select a slice (only for debugging purposes)
+    slc_sel = 15 # reconstruct only the selected slice, reconstruct all if this is None
+
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
     if os.path.exists(tmp_file):
@@ -477,6 +480,8 @@ def process_raw(acqGroup, metadata, sensmaps):
     os.chmod(tmp_file, 0o777) # otherwise file is not readable outside container
 
     # Write header
+    if slc_sel is not None:
+        metadata.encoding[0].encodingLimits.slice.maximum = 0
     dset_tmp.write_xml_header(metadata.toxml())
 
     # Insert Field Map
@@ -484,19 +489,28 @@ def process_raw(acqGroup, metadata, sensmaps):
     if not os.path.exists(fmap_path):
         raise ValueError("No field map file in dependency folder. Field map should be .npz file containing the field map and field map regularisation parameters")
     fmap = np.load(fmap_path, allow_pickle=True)
+    fmap_data = fmap['fmap']
+    if slc_sel is not None:
+        fmap_data = fmap_data[slc_sel]
 
     print("Field Map name:", fmap['name'].item())
     print("Field Map regularisation parameters:",  fmap['params'].item())
-    dset_tmp.append_array('FieldMap', fmap['fmap']) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
+    dset_tmp.append_array('FieldMap', fmap_data) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
 
     # Insert Sensitivity Maps
     sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
+    if slc_sel is not None:
+        sens = sens[slc_sel]
     dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
     # Insert acquisitions
     for k, slc in enumerate(acqGroup):
         for j, acq in enumerate(slc):
-                dset_tmp.append_acquisition(acq)
+            if (acq.idx.slice != slc_sel and slc_sel is not None):
+                continue
+            if (acq.idx.slice == slc_sel and slc_sel is not None):
+                acq.idx.slice = 0
+            dset_tmp.append_acquisition(acq)
     dset_tmp.close()
 
     # Process with PowerGrid
@@ -504,7 +518,7 @@ def process_raw(acqGroup, metadata, sensmaps):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", niter=15, beta=0, timesegs=5, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=8, niter=8, beta=0, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
