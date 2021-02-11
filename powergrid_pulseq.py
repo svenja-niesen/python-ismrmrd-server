@@ -22,6 +22,9 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 
 def process(connection, config, metadata):
     
+    # Select a slice (only for debugging purposes)
+    slc_sel = None # reconstruct only the selected slice, set to "None" to reconstruct all slices
+
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
         os.makedirs(debugFolder)
@@ -106,19 +109,22 @@ def process(connection, config, metadata):
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
                 
-                
                 # Accumulate all imaging readouts in a group
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
                     continue
                 elif item.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA): # skope sync scans
                     continue
                 elif item.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
+                    if (item.idx.slice != slc_sel and slc_sel is not None):
+                        sensmaps[item.idx.slice] = 0 # calculate sensmap only for selected slice
+                        continue
                     acsGroup[item.idx.slice].append(item)
                     continue
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) # [nx,ny,nz,nc]
 
+                # Deal with ADC segments
                 if item.idx.segment == 0:
                     acqGroup[item.idx.slice].append(item)
                 else:
@@ -126,8 +132,8 @@ def process(connection, config, metadata):
                     idx_lower = item.idx.segment * item.number_of_samples
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
-                
-                # fov shift and noise whitening
+
+                # Inplane FOV shift and noise whitening
                 if item.idx.segment == nsegments - 1:
                     rotmat = calc_rotmat(item)
                     shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
@@ -142,13 +148,13 @@ def process(connection, config, metadata):
                 # if no refscan, calculate sensitivity maps from raw data
                 if sensmaps[item.idx.slice] is None:
                     if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
-                        sensmaps[item.idx.slice] = sens_from_raw(acqGroup[item.idx.slice])
+                        sensmaps[item.idx.slice] = sens_from_raw(acqGroup[item.idx.slice], metadata)
 
                 # When all acquisitions are processed, write them to file for PowerGrid Reco,
                 # which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_MEASUREMENT):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup, metadata, sensmaps)
+                    images = process_raw(acqGroup, metadata, sensmaps, slc_sel)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -335,6 +341,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         nsamples = dset_acq.number_of_samples
         nsegments = prot_hdr.userParameters.userParameterDouble[2].value_
         nsamples_full = int(nsamples*nsegments+0.5)
+        nsamples_max = 65535 # number_of_samples is a uint16, so we cannot store a higher number here
+        if nsamples_full > nsamples_max:
+            raise ValueError("The number of samples exceed the maximum allowed number of 65535 (uint16 maximum).")
+
         dwelltime = 1e-6*prot_hdr.userParameters.userParameterDouble[0].value_ # [s]
         t_min = prot_hdr.userParameters.userParameterDouble[3].value_ # [s]
         t_vec = t_min + dwelltime * np.arange(nsamples_full) # time vector for B0 correction
@@ -467,10 +477,7 @@ def grad_pred(grad, girf):
 
     return pred_grad
 
-def process_raw(acqGroup, metadata, sensmaps):
-
-    # Select a slice (only for debugging purposes)
-    slc_sel = 15 # reconstruct only the selected slice, reconstruct all if this is None
+def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
@@ -498,9 +505,10 @@ def process_raw(acqGroup, metadata, sensmaps):
     dset_tmp.append_array('FieldMap', fmap_data) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
 
     # Insert Sensitivity Maps
-    sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
     if slc_sel is not None:
-        sens = sens[slc_sel]
+        sens = np.transpose(sensmaps[slc_sel], [3,2,1,0])
+    else:
+        sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
     dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
     # Insert acquisitions
@@ -518,7 +526,7 @@ def process_raw(acqGroup, metadata, sensmaps):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=8, niter=8, beta=0, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=7, niter=8, beta=0, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -562,7 +570,7 @@ def process_raw(acqGroup, metadata, sensmaps):
         dsets.append(data)
 
     for data in dsets:
-        # Format as ISMRMRD image data
+        # Format as ISMRMRD image data - WIP: something goes wrong here with indexes
         for rep in range(data.shape[0]):
             for phs in range(data.shape[1]):
                 for echo in range(data.shape[2]):
@@ -600,12 +608,12 @@ def process_acs(group, config, metadata, dmtx=None):
     else:
         return None
 
-def sens_from_raw(group, metadata, dmtx):
+def sens_from_raw(group, metadata):
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     ny = metadata.encoding[0].encodedSpace.matrixSize.y
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
     
-    data, trj = sort_spiral_data(group, metadata, dmtx)
+    data, trj = sort_spiral_data(group, metadata)
 
     sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
     sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
