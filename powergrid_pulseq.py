@@ -133,8 +133,8 @@ def process(connection, config, metadata):
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
-                # Inplane FOV shift and noise whitening
                 if item.idx.segment == nsegments - 1:
+                    # Inplane FOV shift and noise whitening
                     rotmat = calc_rotmat(item)
                     shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
                     if dmtx is None:
@@ -479,6 +479,8 @@ def grad_pred(grad, girf):
 
 def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
+    avg_before = True # average acquisitions before reco
+
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
     if os.path.exists(tmp_file):
@@ -489,6 +491,9 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     # Write header
     if slc_sel is not None:
         metadata.encoding[0].encodingLimits.slice.maximum = 0
+    if avg_before:
+        n_avg = metadata.encoding[0].encodingLimits.average.maximum + 1
+        metadata.encoding[0].encodingLimits.average.maximum = 0
     dset_tmp.write_xml_header(metadata.toxml())
 
     # Insert Field Map
@@ -511,13 +516,30 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
         sens = np.transpose(np.stack(sensmaps), [0,4,3,2,1]) # [slices,nc,nz,ny,nx] - only tested for 2D, nx/ny might be changed depending on orientation
     dset_tmp.append_array("SENSEMap", sens.astype(np.complex128))
 
+    # Average acquisition data before reco
+    # Assume that averages are acquired in the same order for every slice, contrast, ...
+    if avg_before:
+        avgData = [[] for _ in range(n_avg)]
+        for k, slc in enumerate(acqGroup):
+            for j, acq in enumerate(slc):
+                avgData[acq.idx.average].append(acq.data[:])
+        avgData = np.mean(avgData, axis=0)
+
     # Insert acquisitions
+    avg_ix = 0
     for k, slc in enumerate(acqGroup):
         for j, acq in enumerate(slc):
-            if (acq.idx.slice != slc_sel and slc_sel is not None):
-                continue
-            if (acq.idx.slice == slc_sel and slc_sel is not None):
-                acq.idx.slice = 0
+            if avg_before:
+                if acq.idx.average == 0:
+                    acq.data[:] = avgData[avg_ix]
+                    avg_ix += 1
+                else:
+                  continue
+            if slc_sel is not None:
+                if acq.idx.slice != slc_sel:
+                    continue
+                else:
+                    acq.idx.slice = 0
             dset_tmp.append_acquisition(acq)
     dset_tmp.close()
 
@@ -526,7 +548,7 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=7, niter=8, beta=0, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=8, beta=0, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -560,25 +582,29 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     # If we have a diffusion dataset, b-value and direction contrasts are stored in contrast index
     # as otherwise we run into problems with the PowerGrid acquisition tracking.
     # We now (in case of diffusion imaging) split the b=0 image from other images and reshape to b-values and directions
-    bval = metadata.encoding[0].encodingLimits.contrast.center # number of b-values (incl b=0)
-    dirs = metadata.encoding[0].encodingLimits.phase.center # number of directions
-    if bval > 0:
+    n_bval = metadata.encoding[0].encodingLimits.contrast.center # number of b-values (incl b=0)
+    n_dirs = metadata.encoding[0].encodingLimits.phase.center # number of directions
+    if n_bval > 0:
         shp = data.shape
         dsets.append(np.expand_dims(data[:,0], 1))
-        dsets.append(data[:,1:].reshape(shp[0], bval-1, dirs, shp[3], shp[4], shp[5], shp[6]))
+        dsets.append(data[:,1:].reshape(shp[0], n_bval-1, n_dirs, shp[3], shp[4], shp[5], shp[6]))
     else:
         dsets.append(data)
 
+    slc_img_ix = 0
     for data in dsets:
-        # Format as ISMRMRD image data - WIP: something goes wrong here with indexes
+        # Format as ISMRMRD image data
         for rep in range(data.shape[0]):
-            for phs in range(data.shape[1]):
-                for echo in range(data.shape[2]):
+            for echo in range(data.shape[1]):
+                slc_img_ix += 1
+                img_ix = 0
+                for phs in range(data.shape[2]):
                     for slc in range(data.shape[3]):
                         for nz in range(data.shape[4]):
+                            img_ix += 1
                             image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
-                            image.image_index = 1 + slc*data.shape[4] + nz # contains image index (slices/partitions)
-                            image.image_series_index = 1 + rep*data.shape[1]*data.shape[2] + phs*data.shape[2] + echo # contains image series index, e.g. different contrasts
+                            image.image_index = img_ix # contains slices/partitions and phases
+                            image.image_series_index = slc_img_ix # contains repetitions, contrasts
                             image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
                             image.attribute_string = xml
                             images.append(image)
