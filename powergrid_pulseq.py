@@ -602,7 +602,7 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
                     for slc in range(data.shape[3]):
                         for nz in range(data.shape[4]):
                             img_ix += 1
-                            image = ismrmrd.Image.from_array(data[rep,phs,echo,slc,nz], acquisition=acqGroup[slc][0])
+                            image = ismrmrd.Image.from_array(data[rep,echo,phs,slc,nz], acquisition=acqGroup[slc][0])
                             image.image_index = img_ix # contains slices/partitions and phases
                             image.image_series_index = slc_img_ix # contains repetitions, contrasts
                             image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
