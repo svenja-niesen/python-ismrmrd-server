@@ -473,7 +473,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
         # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -e -l1 -r 0.001 -i 50 -t', trj, data, sensmaps)
+        data = bart(1, 'pics -S -e -l1 -r 0.001 -i 50 -t', trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
@@ -511,7 +511,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     n_par = data.shape[-1]
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
 
-    # Format as ISMRMRD image data
+    # Format as ISMRMRD image data - WIP: something goes wrong here with indexes
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])

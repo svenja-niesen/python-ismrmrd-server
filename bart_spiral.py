@@ -710,7 +710,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     else:
         # data = bart(1, 'pics -e -i 20 -t', trj, data, sensmaps)
         # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
+        data = bart(1, 'pics -S -e -l1 -r 0.0001 -i 100 -t', trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
