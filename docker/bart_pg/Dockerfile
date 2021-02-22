@@ -72,7 +72,7 @@ RUN  cd /opt/code \
 RUN  cd /opt/code \
      && git clone https://gitlab.com/conradsnicta/armadillo-code \
      && cd armadillo-code \
-     && git checkout 8.600.x \
+     && git checkout 9.900.x \
      && mkdir build && cd build \
      && cmake .. \
      && make -j $(nproc) \
