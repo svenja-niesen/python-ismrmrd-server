@@ -7,7 +7,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt-get update --quiet \
     && apt-get install --no-install-recommends --no-install-suggests --yes \
-       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev libsuperlu5 pybind11-dev
+       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils cmake cmake-curses-gui libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev libsuperlu5
 
 
 # install mkl
@@ -78,10 +78,20 @@ RUN  cd /opt/code \
      && make -j $(nproc) \
      && make install
 
+# Install Pybind11 and PowerGrid
+
 RUN  cd /opt/code \
      && git clone https://github.com/mavel101/PowerGrid \
+     && cd PowerGrid \
+     && git checkout icefire_nonpgi \
+     && git submodule update --init --recursive \
+     && cd pybind11 \
+     && mkdir build \
+     && cd build \
+     && cmake ../ \
+     && make \
+     && make install \
      && cd /opt/code/PowerGrid \
-     && git checkout icefire \
      && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
