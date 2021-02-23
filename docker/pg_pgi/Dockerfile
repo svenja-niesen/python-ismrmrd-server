@@ -78,31 +78,31 @@ RUN curl -O -J -L https://github.com/Kitware/CMake/releases/download/v3.19.2/cma
     && make install
 
 # Download and install NVIDIA HPC SDK
-RUN  wget https://developer.download.nvidia.com/hpc-sdk/21.2/nvhpc-21-2_21.2_amd64.deb \
-     https://developer.download.nvidia.com/hpc-sdk/21.2/nvhpc-2021_21.2_amd64.deb \
-     && apt-get install ./nvhpc-21-2_21.2_amd64.deb ./nvhpc-2021_21.2_amd64.deb
+RUN  wget https://developer.download.nvidia.com/hpc-sdk/20.11/nvhpc-20-11_20.11_amd64.deb \
+     https://developer.download.nvidia.com/hpc-sdk/20.11/nvhpc-2020_20.11_amd64.deb \
+     && apt-get install ./nvhpc-20-11_20.11_amd64.deb ./nvhpc-2020_20.11_amd64.deb
 
 # Handle NVIDIA HPC SDK specific stuff
 ENV NVARCH=Linux_x86_64
 ENV NVCOMPILERS=/opt/nvidia/hpc_sdk
-ENV NVSDKVER=21.2
+ENV NVSDKVER=20.11
 ENV CUDA_PATH="${NVCOMPILERS}/${NVARCH}/${NVSDKVER}/cuda"
-ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/21.2/compilers/man"
+ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/20.11/compilers/man"
 ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/21.2/compilers/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/lib:${LD_LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/compilers/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/21.2/math_libs/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/math_libs/lib64:${LD_LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/math_libs/lib64:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
 ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
-ENV OPAL_PREFIX="${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/mpi/"
-ENV PATH="${NVCOMPILERS}/${NVARCH}/21.2/compilers/bin:${PATH}"
-ENV PATH="${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/mpi/bin:${PATH}"
-ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/21.2/comm_libs/mpi/man"
+ENV OPAL_PREFIX="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/"
+ENV PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/bin:${PATH}"
+ENV PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/bin:${PATH}"
+ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/man"
 
 # Install custom compile of boost for mpi.
 RUN wget -O ~/boost_1_75_0.tar.bz2 -c 'https://dl.bintray.com/boostorg/release/1.75.0/source/boost_1_75_0.tar.bz2' --max-redirect=100 \
@@ -136,7 +136,7 @@ RUN cd opt/code \
     && mkdir build \
     && cd build \
     && echo $PATH \
-    && cmake ../ -DCMAKE_CXX_COMPILER=nvc++ -DCMAKE_C_COMPILER=nvc \
+    && cmake ../ -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_COMPILER=nvc++ -DCMAKE_C_COMPILER=nvc \
     && make \
     && make install \
     && ldconfig
@@ -145,9 +145,10 @@ RUN cd opt/code \
 # and install PowerGrid
 
 RUN  cd /opt/code \
-     && git clone --recurse-submodules https://github.com/mavel101/PowerGrid \
+     && git clone https://github.com/mavel101/PowerGrid \
      && cd PowerGrid \
      && git checkout icefire \
+     && git submodule update --init --recursive \
      && cd pybind11 \
      && mkdir build \
      && cd build \
@@ -155,7 +156,6 @@ RUN  cd /opt/code \
      && make \
      && make install \
      && cd /opt/code/PowerGrid \
-     && mv setupPGI.py setup.py \
      && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
@@ -165,15 +165,10 @@ LABEL maintainer="Philipp Ehses (philipp.ehses@dzne.de)"
 ENV TZ=Europe/Berlin
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Copy siemens_to_ismrmrd from last stage and re-add necessary dependencies
-COPY --from=mrd_converter /usr/local/lib/libismrmrd*        /usr/local/lib/
-COPY --from=mrd_converter /usr/local/bin/siemens_to_ismrmrd /usr/local/bin/siemens_to_ismrmrd
-COPY --from=mrd_converter /usr/local/bin/bart /usr/local/bin/bart
+# Copy packages from last stage and re-add necessary dependencies
+COPY --from=mrd_converter /usr/local/. /usr/local/
+COPY --from=mrd_converter /opt/nvidia /opt/nvidia 
 COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
-COPY --from=mrd_converter /usr/include/armadillo_bits       /usr/include/armadillo_bits
-COPY --from=mrd_converter /usr/include/armadillo            /usr/include/armadillo
-COPY --from=mrd_converter /usr/lib/x86_64-linux-gnu/libarmadillo* /usr/lib/x86_64-linux-gnu/
-COPY --from=mrd_converter /usr/lib/x86_64-linux-gnu/pkgconfig/armadillo.pc /usr/lib/x86_64-linux-gnu/pkgconfig/armadillo.pc
 COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
 
 # Copy MKL
@@ -202,7 +197,7 @@ COPY --from=mrd_converter /opt/code/bart/python/* /opt/code/pythonpath/
 RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
-        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke openmpi-bin\
+        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke openmpi-bin libhdf5-dev libatomic1\
      && pip3 install --no-cache-dir pyxb h5py intel-openmp
 
 RUN  mkdir -p /opt/code
