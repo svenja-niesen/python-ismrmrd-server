@@ -9,6 +9,20 @@ import base64
 from bart import bart
 from cfft import cfftn, cifftn
 
+""" Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
+    Reconstruction is done with the BART toolbox
+
+Short Comments on FOV Shifting and rotations:
+    - Translational shifts should not be acticvated in the GUI, when using the Pulseq Sequence.
+      However in-plane FOV shifts can be selected also without activating FOV positioning and are applied in this reco.
+
+    - Rotations are not yet possible as only the standard rotation matrix for Pulseq is considered and taken from the protocol dile.
+      The standard rotation matrix was obtained by simulating predefined gradients.
+      To implement rotations selected in the GUI, the correct rotation matrix has to be obtained from the dataset ISMRMRD file coming from the scanner.
+      However, that rotation matrix seems to be incorrect, as it switches phase and read gradients. It seems like an additional transformation would have to be applied.
+
+"""
+
 
 # Folder for sharing data/debugging
 shareFolder = "/tmp/share"
@@ -274,7 +288,7 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
 
     prot_acq = prot.read_acquisition(acq_ctr)
 
-    # rotation matrix
+    # Standard rotation matrix for Pulseq
     dset_acq.phase_dir[:] = prot_acq.phase_dir[:]
     dset_acq.read_dir[:] = prot_acq.read_dir[:]
     dset_acq.slice_dir[:] = prot_acq.slice_dir[:]
@@ -371,6 +385,9 @@ def calc_traj(acq, hdr, ncol):
     filepath = os.path.dirname(os.path.abspath(__file__))
     girf = np.load(os.path.join(dependencyFolder, "girf_10us.npy"))
 
+    # This reco does not handle rotations selected in the Siemens GUI yet
+    # To implement that, the correct rotation matrix has to be extracted.
+    # 
     # rotation to phys coord system
     grad_phys = gcs_to_dcs(grad, rotmat)
 
@@ -540,7 +557,7 @@ def process_acs(group, config, metadata, dmtx=None):
 
         # fov shift
         rotmat = calc_rotmat(group[0])
-        if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan has no rotmat in protocol
+        if not rotmat.any(): rotmat = -1*np.eye(3) # compatibility if refscan rotmat is not in protocol, this is the standard Pulseq rotation matrix
         res = metadata.encoding[0].encodedSpace.fieldOfView_mm.x / metadata.encoding[0].encodedSpace.matrixSize.x
         shift = pcs_to_gcs(np.asarray(group[0].position), rotmat) / res
         data = fov_shift(data, shift)
@@ -770,10 +787,10 @@ def gcs_to_dcs(grads, rotmat):
         this is valid for patient orientation head first/supine
     Parameters
     ----------
-    grads : numpy array [3, intl, samples]
+    grads : numpy array [3, samples]
             gradient to be converted
     rotmat: numpy array [3,3]
-            rotation matrix from quaternion from Siemens Raw Data header
+            rotation matrix from Siemens Raw Data header
     Returns
     -------
     grads_cv : numpy.ndarray
@@ -797,10 +814,10 @@ def dcs_to_gcs(grads, rotmat):
         this is valid for patient orientation head first/supine
     Parameters
     ----------
-    grads : numpy array [3, intl, samples]
+    grads : numpy array [3, samples]
             gradient to be converted
     rotmat: numpy array [3,3]
-            rotation matrix from quaternion from Siemens Raw Data header
+            rotation matrix from Siemens Raw Data header
     Returns
     -------
     grads_cv : numpy.ndarray
