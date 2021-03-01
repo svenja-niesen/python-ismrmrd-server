@@ -35,8 +35,11 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 
 def process(connection, config, metadata):
     
-    # Select a slice (only for debugging purposes)
-    slc_sel = None # reconstruct only the selected slice, set to "None" to reconstruct all slices
+    # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
+    slc_sel = 8
+
+    # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
+    skope = True
 
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
@@ -46,6 +49,8 @@ def process(connection, config, metadata):
     protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
     protFolder_local = "/tmp/local/pulseq_protocols" # Protocols mountpoint (not at the scanner)
     prot_filename = metadata.userParameters.userParameterString[0].value_ # protocol filename from Siemens protocol parameter tFree
+    if skope:
+        prot_filename += "_skopetraj"
 
     # Check if local protocol folder is available - if not use protFolder (scanner)
     date = prot_filename.split('_')[0] # folder in ParametersProcessedData (=date of seqfile)
@@ -105,7 +110,7 @@ def process(connection, config, metadata):
             if isinstance(item, ismrmrd.Acquisition):
 
                 # insert acquisition protocol
-                base_trj = insert_acq(prot_file, item, acq_ctr)
+                base_trj = insert_acq(prot_file, item, acq_ctr, skope=skope)
                 if base_trj is not None: # base_trj is calculated e.g. for future trajectory comparisons
                     base_trj_.append(base_trj)
 
@@ -287,7 +292,7 @@ def insert_hdr(prot_file, metadata):
 
     prot.close()
 
-def insert_acq(prot_file, dset_acq, acq_ctr):
+def insert_acq(prot_file, dset_acq, acq_ctr, skope=False):
 
     #---------------------------
     # Read protocol
@@ -365,10 +370,14 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         # save data as it gets corrupted by the resizing, dims are [nc, samples]
         data_tmp = dset_acq.data[:] 
 
+        # calculate trajectory with GIRF or take skope trajectory
+        reco_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
+        if skope:
+            reco_trj = prot_acq.traj[:,:3] # skope trajectory (aligned to ADC) should be in the protocol file
+
         dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
-        pred_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
-        dset_acq.traj[:,:3] = pred_trj.copy()
+        dset_acq.traj[:,:3] = reco_trj.copy()
         dset_acq.traj[:,3] = t_vec
 
         prot.close()
@@ -441,7 +450,7 @@ def calc_traj(acq, hdr, ncol):
     # account for cumsum (assumes rects for integration, we have triangs) - dt_skope/2 seems to be necessary
     gradtime += dt_grad/2 - dt_skope/2
 
-    # proper scaling - WIP: use BART scaling, is this also the Ismrmrd scaling???
+    # proper scaling
     pred_trj *= dt_grad * gammabar * (1e-3 * fov)
     base_trj *= dt_grad * gammabar * (1e-3 * fov)
 
@@ -492,7 +501,8 @@ def grad_pred(grad, girf):
 
 def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
-    avg_before = True # average acquisitions before reco
+    # average acquisitions before reco
+    avg_before = True 
 
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
