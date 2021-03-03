@@ -36,10 +36,10 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = 8
+    slc_sel = None
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
-    skope = True
+    skope = False
 
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
@@ -503,6 +503,9 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
     # average acquisitions before reco
     avg_before = True 
+    if metadata.encoding[0].encodingLimits.contrast.maximum > 0:
+        print(metadata.encoding[0].encodingLimits.contrast.maximum)
+        avg_before = False # do not average before in diffusion imaging as this would introduce phase errors
 
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
