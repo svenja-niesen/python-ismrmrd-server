@@ -8,6 +8,7 @@ import base64
 
 from bart import bart
 from PowerGridPy import PowerGridIsmrmrd
+from PowerGridPyMPI import PowerGridSenseMPI
 from cfft import cfftn, cifftn
 
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
@@ -504,7 +505,6 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     # average acquisitions before reco
     avg_before = True 
     if metadata.encoding[0].encodingLimits.contrast.maximum > 0:
-        print(metadata.encoding[0].encodingLimits.contrast.maximum)
         avg_before = False # do not average before in diffusion imaging as this would introduce phase errors
 
     # Write ISMRMRD file for PowerGrid
@@ -574,6 +574,7 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
+    # data = PowerGridSenseMPI(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
     data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
