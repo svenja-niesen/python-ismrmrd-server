@@ -1,4 +1,5 @@
-FROM ubuntu:20.04 AS mrd_converter
+FROM nvidia/cuda:11.0-devel-ubuntu20.04 AS mrd_converter
+CMD nvidia-smi
 
 LABEL maintainer="Marten Veldmann (marten.veldmann@dzne.de)"
 
@@ -58,14 +59,14 @@ RUN cd /opt/code \
 
 
 # compile & install the bart MRI toolbox
-RUN  cd /opt/code \
-     && git clone https://github.com/mrirecon/bart \
-     && cd bart \
-     && echo MKL=1 >> Makefile.local \
-     && echo MKL_BASE=/opt/intel/mkl >> Makefile.local \
-     && echo PARALLEL=1 >> Makefile.local \
-     && make \
-     && make install
+# RUN  cd /opt/code \
+     # && git clone https://github.com/mrirecon/bart \
+     # && cd bart \
+     # && echo MKL=1 >> Makefile.local \
+     # && echo MKL_BASE=/opt/intel/mkl >> Makefile.local \
+     # && echo PARALLEL=1 >> Makefile.local \
+     # && make \
+     # && make install
      # && echo SLINK=1 >> Makefile.local \
      # && echo CUDA=1 >> Makefile.local \
      # && echo CUDA_BASE=/usr/local/cuda/ >> Makefile.local \
@@ -145,7 +146,7 @@ RUN  cd /opt/code \
      && cd PowerGrid \
      && git checkout icefire \
      && git submodule update --init --recursive \
-     && cp PowerGrid/Python/setup_PGI.py setup.py \
+     && cp PowerGrid/Python/setup_PGIGPU.py setup.py \
      && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
@@ -162,21 +163,21 @@ COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
 COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
 
 # Handle NVIDIA HPC SDK specific stuff
-# ENV NVARCH=Linux_x86_64
-# ENV NVCOMPILERS=/opt/nvidia/hpc_sdk
-# ENV NVSDKVER=20.11
-# ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/compilers/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/math_libs/lib64:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/math_libs/lib64:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
-# ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
-# ENV OPAL_PREFIX="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/"
+ENV NVARCH=Linux_x86_64
+ENV NVCOMPILERS=/opt/nvidia/hpc_sdk
+ENV NVSDKVER=20.11
+ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/compilers/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/math_libs/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/math_libs/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
+ENV OPAL_PREFIX="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/"
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
@@ -204,8 +205,8 @@ COPY --from=mrd_converter /opt/code/bart/python/* /opt/code/pythonpath/
 RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
-        ca-certificates nano git gcc python3 python3-dev python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libarpack2-dev openmpi-bin libopenmpi-dev libhdf5-dev libatomic1\
-     && pip3 install --no-cache-dir pyxb h5py intel-openmp mpi4py sigpy 
+        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libarpack2-dev openmpi-bin libhdf5-dev libatomic1\
+     && pip3 install --no-cache-dir pyxb h5py intel-openmp mpi4py cupy sigpy
 
 RUN  mkdir -p /opt/code
 

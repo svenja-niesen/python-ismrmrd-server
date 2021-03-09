@@ -1,6 +1,6 @@
-FROM ubuntu:20.04 AS mrd_converter
+FROM mrd_converter
 
-LABEL maintainer="Philipp Ehses (philipp.ehses@dzne.de)"
+LABEL maintainer="Marten Veldmann (marten.veldmann@dzne.de)"
 
 ENV TZ=Europe/Berlin
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -20,7 +20,6 @@ RUN  mkdir -p /opt/code
 RUN  cd /opt/code \
      && git clone -b bart https://github.com/pehses/python-ismrmrd-server.git
 
-
 # install spiraltraj for trajectory calculation
 COPY spiraltraj /opt/code/spiraltraj
 RUN  cd /opt/code \
@@ -28,7 +27,6 @@ RUN  cd /opt/code \
      && pip3 wheel .
      # && git clone https://github.com/mrphysics-bonn/spiral-pypulseq-example \
      # && mv spiral-pypulseq-example/spiraltraj . \
-
 
 # ISMRMRD library
 RUN cd /opt/code \
@@ -50,7 +48,6 @@ RUN cd /opt/code \
     && cmake ../ \
     && make -j $(nproc) \
     && make install
-
 
 # compile & install the bart MRI toolbox
 RUN  cd /opt/code \
@@ -78,25 +75,18 @@ RUN  cd /opt/code \
      && make -j $(nproc) \
      && make install
 
-# Install Pybind11 and PowerGrid
-
+# Install PowerGrid
 RUN  cd /opt/code \
      && git clone https://github.com/mavel101/PowerGrid \
      && cd PowerGrid \
-     && git checkout icefire_nonpgi \
+     && git checkout icefire \
      && git submodule update --init --recursive \
-     && cd pybind11 \
-     && mkdir build \
-     && cd build \
-     && cmake ../ \
-     && make \
-     && make install \
-     && cd /opt/code/PowerGrid \
+     && cp PowerGrid/Python/setup_nonPGI.py setup.py \
      && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
 FROM ubuntu:20.04
-LABEL maintainer="Philipp Ehses (philipp.ehses@dzne.de)"
+LABEL maintainer="Marten Veldmann (marten.veldmann@dzne.de)"
 
 ENV TZ=Europe/Berlin
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
