@@ -12,15 +12,6 @@ from cfft import cfftn, cifftn
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
     Reconstruction is done with the BART toolbox
 
-Short Comments on FOV Shifting and rotations:
-    - Translational shifts should not be acticvated in the GUI, when using the Pulseq Sequence.
-      However in-plane FOV shifts can be selected also without activating FOV positioning and are applied in this reco.
-
-    - Rotations are not yet possible as only the standard rotation matrix for Pulseq is considered and taken from the protocol dile.
-      The standard rotation matrix was obtained by simulating predefined gradients.
-      To implement rotations selected in the GUI, the correct rotation matrix has to be obtained from the dataset ISMRMRD file coming from the scanner.
-      However, that rotation matrix seems to be incorrect, as it switches phase and read gradients. It seems like an additional transformation would have to be applied.
-
 """
 
 
@@ -41,14 +32,7 @@ def process(connection, config, metadata):
         logging.debug("Created folder " + debugFolder + " for debug output files")
 
     protFolder = os.path.join(dependencyFolder, "pulseq_protocols")
-    protFolder_local = "/tmp/local/pulseq_protocols" # Protocols mountpoint (not at the scanner)
     prot_filename = metadata.userParameters.userParameterString[0].value_ # protocol filename from Siemens protocol parameter tFree
-
-    # Check if local protocol folder is available - if not use protFolder (scanner)
-    date = prot_filename.split('_')[0] # folder in ParametersProcessedData (=date of seqfile)
-    protFolder_loc = os.path.join(protFolder_local, date)
-    if os.path.exists(protFolder_loc):
-        protFolder = protFolder_loc
 
     # Insert protocol header
     prot_file = protFolder + "/" + prot_filename
@@ -98,7 +82,7 @@ def process(connection, config, metadata):
 
                 # insert acquisition protocol
                 base_trj = insert_acq(prot_file, item, acq_ctr)
-                if base_trj is not None: # base_trj is calculated e.g. for future trajectory comparisons
+                if base_trj is not None:
                     base_trj_.append(base_trj)
 
                 # run noise decorrelation
@@ -304,7 +288,7 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
     dset_acq.idx.set = prot_acq.idx.set
     dset_acq.idx.segment = prot_acq.idx.segment
 
-    # flags - WIP: this is not the complete list of flags - if needed, flags can be added
+    # flags
     if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
         dset_acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
     if prot_acq.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
@@ -326,7 +310,7 @@ def insert_acq(prot_file, dset_acq, acq_ctr):
         prot.close()
         return
 
-    # calculate trajectory with GIRF prediction - trajectory is stored only in first segment
+    # calculate trajectory with GIRF prediction
     base_trj = None
     if dset_acq.idx.segment == 0:
         nsamples = dset_acq.number_of_samples
@@ -475,9 +459,6 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
-    # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
-        # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
-
     force_pics = True
     if sensmaps is None and force_pics:
         sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
@@ -878,36 +859,5 @@ def fov_shift_spiral(sig, trj, shift, matr_sz):
 
     kmax = matr_sz/2
     sig *= np.exp(-1j*(shift[1]*np.pi*trj[0]/kmax+shift[0]*np.pi*trj[1]/kmax))[np.newaxis]
-
-    return sig
-
-# the fov-shift from the Pulseq sequence is not correct 
-# tried to reapply it with the predicted trajectory, but also doesnt work properly
-def fov_shift_spiral_reapply(acq, base_trj, matr_sz, res):
-    """ 
-    shift field of view of spiral data
-    first undo field of view shift with nominal, then reapply with predicted trajectory
-
-    acq: ISMRMRD acquisition
-    base_trj: nominal trajectory
-    matr_sz: matrix size
-    res: resolution 
-    """
-    rotmat = calc_rotmat(acq)
-    shift = pcs_to_gcs(np.asarray(acq.position), rotmat) / res
-    sig = acq.data[:]
-    pred_trj = acq.traj[:] # [samples, dims]
-
-    if (abs(shift[0]) < 1e-2) and (abs(shift[1]) < 1e-2):
-        # nothing to do
-        return sig
-
-    kmax = int(matr_sz/2+0.5)
-
-    # undo FOV shift from nominal traj
-    sig *= np.exp(-1j*(shift[0]*np.pi*base_trj[:,0]/kmax-shift[1]*np.pi*base_trj[:,1]/kmax))
-
-    # redo FOV shift with predicted traj
-    sig *= np.exp(1j*(shift[0]*np.pi*pred_trj[:,0]/kmax-shift[1]*np.pi*pred_trj[:,1]/kmax))
 
     return sig
