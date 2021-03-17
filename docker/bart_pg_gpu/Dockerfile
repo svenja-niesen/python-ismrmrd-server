@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.0-devel-ubuntu20.04 AS mrd_converter
+FROM nvidia/cuda:11.1-devel-ubuntu20.04 AS mrd_converter
 CMD nvidia-smi
 
 LABEL maintainer="Marten Veldmann (marten.veldmann@dzne.de)"
@@ -8,20 +8,19 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt-get update --quiet \
     && apt-get install --no-install-recommends --no-install-suggests --yes \
-       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils libboost-all-dev libfftw3-dev git build-essential gfortran libpng-dev liblapacke-dev libarpack2-dev libpng-dev libopenblas-dev libxml2-dev libxslt1-dev libssl-dev curl
+       wget apt-utils apt-transport-https gnupg2 python3-dev python3-pip ca-certificates libhdf5-serial-dev h5utils \
+       libfftw3-dev git build-essential gfortran liblapacke-dev libpng-dev libopenblas-dev libboost-all-dev libxml2-dev libxslt1-dev libssl-dev curl
 
-# install mkl
+# Install Latest CMake
+RUN  apt install software-properties-common --no-install-recommends --no-install-suggests --yes \
+     && wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null \
+     && apt-add-repository 'deb https://apt.kitware.com/ubuntu/ focal main' \
+     && apt update \
+     && apt install cmake --no-install-recommends --no-install-suggests --yes
+
+# Install mkl
 COPY ./mkl.sh /tmp/
 RUN /tmp/mkl.sh
-
-# Build and Install Latest CMake
-RUN curl -O -J -L https://github.com/Kitware/CMake/releases/download/v3.19.2/cmake-3.19.2.tar.gz \
-    && apt-get -y remove --purge cmake \
-    && tar -xvf ./cmake-3.19.2.tar.gz \
-    && cd ./cmake-3.19.2 \
-    && ./bootstrap --prefix=/usr/local/ \
-    && make -j$(nproc) \
-    && make install
 
 RUN  mkdir -p /opt/code
 
@@ -57,19 +56,19 @@ RUN cd /opt/code \
     && make -j $(nproc) \
     && make install
 
-
 # compile & install the bart MRI toolbox
-# RUN  cd /opt/code \
-     # && git clone https://github.com/mrirecon/bart \
-     # && cd bart \
-     # && echo MKL=1 >> Makefile.local \
-     # && echo MKL_BASE=/opt/intel/mkl >> Makefile.local \
-     # && echo PARALLEL=1 >> Makefile.local \
-     # && make \
-     # && make install
-     # && echo SLINK=1 >> Makefile.local \
-     # && echo CUDA=1 >> Makefile.local \
-     # && echo CUDA_BASE=/usr/local/cuda/ >> Makefile.local \
+# use own version of BART where CUDA path is correct
+RUN  cd /opt/code \
+     && git clone https://github.com/mavel101/bart.git \
+     && cd bart \
+     && git checkout makefile_mv \
+     && echo MKL=1 >> Makefile.local \
+     && echo MKL_BASE=/opt/intel/mkl >> Makefile.local \
+     && echo PARALLEL=1 >> Makefile.local \
+     && echo CUDA=1 >> Makefile.local \
+     && echo CUDA_BASE=/usr/local/cuda >> Makefile.local \
+     && make \
+     && make install
      # && echo ENABLE_MEM_CFL=1 >> Makefile.local \
      # && echo ISMRMRD=1 > Makefile.local \
      # && export ISMRMRD_HOME=/usr/local \
@@ -103,7 +102,7 @@ ENV PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/bin:${PATH}"
 ENV PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/bin:${PATH}"
 ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/man"
 
-# Install custom compile of boost for mpi.
+# Install custom compile of boost - only necessary runtime components
 RUN wget -O ~/boost_1_75_0.tar.bz2 -c 'https://dl.bintray.com/boostorg/release/1.75.0/source/boost_1_75_0.tar.bz2' --max-redirect=100 \
     && apt-get -y remove --purge libboost-all-dev \
     && cd ~ \
@@ -146,11 +145,13 @@ RUN  cd /opt/code \
      && cd PowerGrid \
      && git checkout icefire \
      && git submodule update --init --recursive \
-     && cp PowerGrid/Python/setup_PGIGPU.py setup.py \
+     && cp PowerGrid/Python/setup_GPU.py setup.py \
      && pip3 wheel .
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
-FROM ubuntu:20.04
+FROM nvidia/cuda:11.1-devel-ubuntu20.04
+CMD nvidia-smi
+
 LABEL maintainer="Marten Veldmann (marten.veldmann@dzne.de)"
 
 ENV TZ=Europe/Berlin
@@ -161,23 +162,7 @@ COPY --from=mrd_converter /usr/local/. /usr/local/
 COPY --from=mrd_converter /opt/nvidia /opt/nvidia 
 COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
 COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
-
-# Handle NVIDIA HPC SDK specific stuff
-ENV NVARCH=Linux_x86_64
-ENV NVCOMPILERS=/opt/nvidia/hpc_sdk
-ENV NVSDKVER=20.11
-ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/compilers/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/compilers/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/math_libs/lib64:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/math_libs/lib64:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/mpi/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nccl/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="${NVCOMPILERS}/${NVARCH}/2020/comm_libs/nvshmem/lib:${LD_LIBRARY_PATH}"
-ENV OPAL_PREFIX="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/"
+ENV LD_LIBRARY_PATH="/usr/local:${LD_LIBRARY_PATH}"
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
@@ -205,16 +190,15 @@ COPY --from=mrd_converter /opt/code/bart/python/* /opt/code/pythonpath/
 RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
-        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libarpack2-dev openmpi-bin libhdf5-dev libatomic1\
-     && pip3 install --no-cache-dir pyxb h5py intel-openmp mpi4py cupy sigpy
+        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libhdf5-dev openmpi-bin libatomic1 \
+     && pip3 install --no-cache-dir pyxb h5py intel-openmp
 
 RUN  mkdir -p /opt/code
 
 # PowerGrid
-ENV LD_LIBRARY_PATH="/usr/local/lib/python3.8/dist-packages:${LD_LIBRARY_PATH}"
 RUN  cd /opt/code \
-     && pip3 install PowerGridPy* 
-     #&& rm PowerGrid*
+     && pip3 install PowerGridPy* \
+     && rm PowerGrid*
 
 RUN  cd /opt/code \
      && pip3 install SpiralTraj* \
@@ -244,5 +228,8 @@ RUN  rm -r /root/.cache/pip
 RUN echo "/opt/code/python-ismrmrd-server/main.py -v -H=0.0.0.0 -p=9002 -l=/tmp/share/debug/python-ismrmrd-server.log" >> /usr/bin/start_server
 RUN chmod +x /usr/bin/start_server
 
+# Expose all GPU to docker
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
 
 CMD ["/usr/bin/start_server"]
