@@ -21,15 +21,6 @@ RUN  cd /opt/code \
      && git clone -b bart https://github.com/pehses/python-ismrmrd-server.git
 
 
-# install spiraltraj for trajectory calculation
-COPY spiraltraj /opt/code/spiraltraj
-RUN  cd /opt/code \
-     && cd spiraltraj \
-     && pip3 wheel .
-     # && git clone https://github.com/mrphysics-bonn/spiral-pypulseq-example \
-     # && mv spiral-pypulseq-example/spiraltraj . \
-
-
 # ISMRMRD library
 RUN cd /opt/code \
     && git clone https://github.com/ismrmrd/ismrmrd.git \
@@ -88,7 +79,6 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 COPY --from=mrd_converter /usr/local/lib/libismrmrd*        /usr/local/lib/
 COPY --from=mrd_converter /usr/local/bin/siemens_to_ismrmrd /usr/local/bin/siemens_to_ismrmrd
 COPY --from=mrd_converter /usr/local/bin/bart /usr/local/bin/bart
-COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
@@ -120,10 +110,6 @@ RUN  apt-get update --quiet \
      && pip3 install --no-cache-dir pyxb h5py
 
 RUN  mkdir -p /opt/code
-
-RUN  cd /opt/code \
-     && pip3 install SpiralTraj* \
-     && rm SpiralTraj*
 
 RUN  cd /opt/code \
      && git clone https://github.com/ismrmrd/ismrmrd-python.git \
