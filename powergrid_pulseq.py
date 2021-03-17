@@ -8,7 +8,6 @@ import base64
 
 from bart import bart
 from PowerGridPy import PowerGridIsmrmrd
-from PowerGridPyMPI import PowerGridSenseMPI
 from cfft import cfftn, cifftn
 
 from pulseq_prot import insert_hdr, insert_acq
@@ -236,7 +235,6 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     if os.path.exists(tmp_file):
         os.remove(tmp_file)
     dset_tmp = ismrmrd.Dataset(tmp_file, create_if_needed=True)
-    os.chmod(tmp_file, 0o777) # otherwise file is not readable outside container
 
     # Write header
     if slc_sel is not None:
@@ -298,8 +296,12 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
     debug_pg = debugFolder+"/powergrid_tmp"
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
-    data = PowerGridSenseMPI(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
+
+    if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
+        # histo is buggy for GPU, so use minmax here as temporal interpolator
+        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='minmax')
+    else:
+        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -378,7 +380,13 @@ def process_acs(group, config, metadata, dmtx=None):
         data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
+        if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
+            print("Run Espirit on GPU.")
+            sensmaps = bart(1, 'ecalib -g -m 1 -k 8 -I', data)  # ESPIRiT calibration
+        else:
+            print("Run Espirit on CPU.")
+            sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
+
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
         return sensmaps
