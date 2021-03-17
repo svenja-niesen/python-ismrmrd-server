@@ -6,3 +6,8 @@
 *.tar
 *.zip
 data/
+.vscode
+docker/bart_cuda/spiraltraj/
+docker/bart_pg/spiraltraj/
+docker/bart_pg_cpu/spiraltraj/
+docker/bart_pg_gpu/spiraltraj/
