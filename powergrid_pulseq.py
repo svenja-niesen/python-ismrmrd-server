@@ -10,7 +10,7 @@ from bart import bart
 from PowerGridPy import PowerGridIsmrmrd
 from cfft import cfftn, cifftn
 
-from pulseq_prot import insert_hdr, insert_acq
+from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
 from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os
 
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
@@ -64,6 +64,7 @@ def process(connection, config, metadata):
     # Insert protocol header
     prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
+    prot_arrays = get_ismrmrd_arrays(prot_file)
 
     # define variables for FOV shift
     nsegments = metadata.userParameters.userParameterDouble[2].value_
@@ -175,7 +176,7 @@ def process(connection, config, metadata):
                 # which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_MEASUREMENT):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup, metadata, sensmaps, slc_sel)
+                    images = process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -223,12 +224,12 @@ def process(connection, config, metadata):
 # Process Data
 #########################
 
-def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
+def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
 
     # average acquisitions before reco
     avg_before = True 
     if metadata.encoding[0].encodingLimits.contrast.maximum > 0:
-        avg_before = False # do not average before in diffusion imaging as this would introduce phase errors
+        avg_before = False # do not average before reco in diffusion imaging as this would introduce phase errors
 
     # Write ISMRMRD file for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
@@ -299,9 +300,9 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
     if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
         # histo is buggy for GPU, so use minmax here as temporal interpolator
-        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='minmax')
+        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, ts_adapt=True, TSInterp='minmax')
     else:
-        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, TSInterp='histo')
+        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, ts_adapt=True, TSInterp='histo')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -364,6 +365,9 @@ def process_raw(acqGroup, metadata, sensmaps, slc_sel=None):
 
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
+
+    if len(prot_arrays) != 0:
+        pass # WIP: Add diffusion evaluation here
 
     return images
 
