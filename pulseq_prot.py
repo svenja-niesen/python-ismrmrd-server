@@ -80,6 +80,26 @@ def insert_hdr(prot_file, metadata):
 
     prot.close()
 
+def get_ismrmrd_arrays(prot_file):
+    try:
+        prot = ismrmrd.Dataset(prot_file+'.hdf5', create_if_needed=False)
+    except:
+        try:
+            prot = ismrmrd.Dataset(prot_file+'.h5', create_if_needed=False)
+        except:
+            raise ValueError('Pulseq protocol file not found.')
+
+    # get array keys - didnt find a better way
+    keys = list(prot.list())
+    keys.remove('data')
+    keys.remove('xml')
+
+    arr = {}
+    for key in keys:
+        arr[key] = prot.read_array(key, 0)
+
+    return arr
+
 def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
 
     #---------------------------
