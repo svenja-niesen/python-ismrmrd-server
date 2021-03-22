@@ -39,7 +39,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = None
+    slc_sel = 10
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
     skope = False
@@ -255,7 +255,8 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         fmap_data = fmap_data[slc_sel]
 
     print("Field Map name:", fmap['name'].item())
-    print("Field Map regularisation parameters:",  fmap['params'].item())
+    if 'params' in fmap:
+        print("Field Map regularisation parameters:",  fmap['params'].item())
     dset_tmp.append_array('FieldMap', fmap_data) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
 
     # Insert Sensitivity Maps
@@ -298,9 +299,10 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     if not os.path.exists(debug_pg):
         os.makedirs(debug_pg)
 
+    n_shots = metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1
     if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
         # histo is buggy for GPU, so use minmax here as temporal interpolator
-        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, ts_adapt=True, TSInterp='minmax')
+        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, nShots=n_shots, beta=0, ts_adapt=True, TSInterp='minmax', FourierTrans='NUFFT')
     else:
         data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, ts_adapt=True, TSInterp='histo')
     shapes = data["shapes"] 
@@ -366,10 +368,14 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
-    if len(prot_arrays) != 0:
-        pass # WIP: Add diffusion evaluation here
+    if len(prot_arrays) > 0:
+        mask = fmap['mask']
+        diff_imgs = process_diffusion_images(data, prot_arrays, mask)
 
     return images
+
+def process_diffusion_images(imgs, prot_arrays, mask):
+    return []
 
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
