@@ -222,7 +222,8 @@ class Connection:
                 logging.info("--> Sending MRD_MESSAGE_ISMRMRD_ACQUISITION (1008) (no further logging of this type)")
                 self.logged_sendraw = True
         else:
-            logging.debug("--> Sending MRD_MESSAGE_ISMRMRD_ACQUISITION (1008)")
+            pass
+            # logging.debug("--> Sending MRD_MESSAGE_ISMRMRD_ACQUISITION (1008)")
 
         self.socket.send(constants.MrdMessageIdentifier.pack(constants.MRD_MESSAGE_ISMRMRD_ACQUISITION))
         acquisition.serialize_into(self.socket.send)
@@ -233,7 +234,8 @@ class Connection:
                 logging.info("<-- Received MRD_MESSAGE_ISMRMRD_ACQUISITION (1008) (no further logging of this type)")
                 self.logged_recvraw = True
         else:
-            logging.debug("--> Received MRD_MESSAGE_ISMRMRD_ACQUISITION (1008)")
+            pass
+            # logging.debug("--> Received MRD_MESSAGE_ISMRMRD_ACQUISITION (1008)")
 
         acq = ismrmrd.Acquisition.deserialize_from(self.read)
 
