@@ -300,11 +300,7 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         os.makedirs(debug_pg)
 
     n_shots = metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1
-    if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
-        # histo is buggy for GPU, so use minmax here as temporal interpolator
-        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, nShots=n_shots, beta=0, ts_adapt=True, TSInterp='minmax', FourierTrans='NUFFT')
-    else:
-        data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, beta=0, ts_adapt=True, TSInterp='histo')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, nShots=n_shots, beta=0, ts_adapt=True, TSInterp='histo', FourierTrans='NUFFT')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
@@ -342,8 +338,10 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     n_dirs = metadata.encoding[0].encodingLimits.phase.center # number of directions
     if n_bval > 0:
         shp = data.shape
-        dsets.append(np.expand_dims(data[:,0], 1))
-        dsets.append(data[:,1:].reshape(shp[0], n_bval-1, n_dirs, shp[3], shp[4], shp[5], shp[6]))
+        b0 = data[:,0]
+        diffw_imgs = data[:,1:].reshape(shp[0], n_bval-1, n_dirs, shp[3], shp[4], shp[5], shp[6])
+        dsets.append(np.expand_dims(b0[:,0], 1))
+        dsets.append(diffw_imgs)
     else:
         dsets.append(data)
 
@@ -368,14 +366,54 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
-    if len(prot_arrays) > 0:
+    if n_bval > 0 and len(prot_arrays) > 0:
         mask = fmap['mask']
-        diff_imgs = process_diffusion_images(data, prot_arrays, mask)
+        adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
+        print(adc_maps.shape)
+
+        # save as ISMRMRD images and append b-values in Image Metadata
 
     return images
 
-def process_diffusion_images(imgs, prot_arrays, mask):
-    return []
+def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
+
+    def geom_mean(arr, axis):
+        return (np.prod(arr, axis=axis))**(1.0/3.0)
+
+    b_val = prot_arrays['b_values']
+    n_bval = b_val.shape[0] - 1
+    directions = prot_arrays['Directions']
+    n_directions = directions.shape[0]
+
+    # reshape images - we dont use repetions and Nz (no 3D imaging for diffusion)
+    b0 = b0[0,0,0,:,0,:,:] # [slices, Ny, Nx]
+    imgshape = [s for s in b0.shape]
+    diff = np.transpose(diffw_imgs[0,:,:,:,0], [2,3,4,1,0]) # from [Rep, b_val, Direction, Slice, Nz, Ny, Nx] to [Slice, Ny, Nx, Direction, b_val]
+
+    # Fit ADC for each direction by linear least squares
+    diff_norm = np.divide(diff.T, b0.T, out=np.zeros_like(diff.T), where=b0.T!=0).T # Nan is converted to 0
+    diff_log  = -np.log(diff_norm, out=np.zeros_like(diff_norm), where=diff_norm!=0)
+    if n_bval<4:
+        d_dir = (diff_log / b_val[1:]).mean(-1)
+    else:
+        d_dir = np.polynomial.polynomial.polyfit(b_val[1:], diff_log.reshape([-1,n_bval]).T, 1)[1,].T.reshape(imgshape+[n_directions])
+
+    # calculate trace images (geometric mean)
+    trace = geom_mean(diff, axis=-2)
+
+    # calculate trace ADC map with LLS
+    trace_norm = np.divide(trace.T, b0.T, out=np.zeros_like(trace.T), where=b0.T!=0).T
+    trace_log  = -np.log(trace_norm, out=np.zeros_like(trace_norm), where=trace_norm!=0)
+
+    # calculate trace diffusion coefficient - WIP: Is the fitting function working right?
+    if n_bval<3:
+        adc_map = (trace_log / b_val[1:]).mean(-1)
+    else:
+        adc_map = np.polynomial.polynomial.polyfit(b_val[1:], trace_log.reshape([-1,n_bval]).T, 1)[1,].T.reshape(imgshape)
+
+    adc_map *= mask
+
+    return adc_map
 
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
