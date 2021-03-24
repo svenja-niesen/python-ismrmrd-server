@@ -39,7 +39,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = 10
+    slc_sel = None
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
     skope = False
@@ -300,7 +300,12 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         os.makedirs(debug_pg)
 
     n_shots = metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=5, niter=10, nShots=n_shots, beta=0, ts_adapt=True, TSInterp='histo', FourierTrans='NUFFT')
+
+    # Comment from Alex Cerjanic, who built PowerGrid: 'histo' option can generate a bad set of interpolators in edge cases
+    # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
+    # However, histo lead to quite nice results so far & does not need as many time segments
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=8, niter=10, nShots=n_shots, beta=0, 
+                                ts_adapt=True, TSInterp='histo', FourierTrans='NUFFT')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
