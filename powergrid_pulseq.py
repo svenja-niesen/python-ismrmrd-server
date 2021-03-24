@@ -304,14 +304,14 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     # Comment from Alex Cerjanic, who built PowerGrid: 'histo' option can generate a bad set of interpolators in edge cases
     # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
     # However, histo lead to quite nice results so far & does not need as many time segments
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=8, niter=10, nShots=n_shots, beta=0, 
-                                ts_adapt=True, TSInterp='histo', FourierTrans='NUFFT')
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=25, niter=10, nShots=n_shots, beta=0, 
+                                ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
 
-    # data should have output [Slice, Phase, Echo/Contrast, Avg, Rep, Nz, Ny, Nx]
-    # change to [Avg, Rep, Echo/Contrast, Phase, Slice, Nz, Ny, Nx] and average
+    # data should have output [Slice, Phase, Contrast, Avg, Rep, Nz, Ny, Nx]
+    # change to [Avg, Rep, Contrast, Phase, Slice, Nz, Ny, Nx] and average
     data = np.transpose(data, [3,4,2,1,0,5,6,7]).mean(axis=0)
 
     logging.debug("Image data is size %s" % (data.shape,))
@@ -338,33 +338,35 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
 
     # If we have a diffusion dataset, b-value and direction contrasts are stored in contrast index
     # as otherwise we run into problems with the PowerGrid acquisition tracking.
-    # We now (in case of diffusion imaging) split the b=0 image from other images and reshape to b-values and directions
+    # We now (in case of diffusion imaging) split the b=0 image from other images and reshape to b-values (contrast) and directions (phase)
     n_bval = metadata.encoding[0].encodingLimits.contrast.center # number of b-values (incl b=0)
     n_dirs = metadata.encoding[0].encodingLimits.phase.center # number of directions
     if n_bval > 0:
         shp = data.shape
-        b0 = data[:,0]
+        b0 = np.expand_dims(data[:,0], 1)
         diffw_imgs = data[:,1:].reshape(shp[0], n_bval-1, n_dirs, shp[3], shp[4], shp[5], shp[6])
-        dsets.append(np.expand_dims(b0[:,0], 1))
+        dsets.append(b0)
         dsets.append(diffw_imgs)
     else:
         dsets.append(data)
 
-    slc_img_ix = 0
-    for data in dsets:
+    series_ix = 0
+    for data_ix,data in enumerate(dsets):
         # Format as ISMRMRD image data
         for rep in range(data.shape[0]):
-            for echo in range(data.shape[1]):
-                slc_img_ix += 1
+            for contr in range(data.shape[1]):
+                series_ix += 1
                 img_ix = 0
                 for phs in range(data.shape[2]):
                     for slc in range(data.shape[3]):
                         for nz in range(data.shape[4]):
                             img_ix += 1
-                            image = ismrmrd.Image.from_array(data[rep,echo,phs,slc,nz], acquisition=acqGroup[slc][0])
+                            image = ismrmrd.Image.from_array(data[rep,contr,phs,slc,nz])
                             image.image_index = img_ix # contains slices/partitions and phases
-                            image.image_series_index = slc_img_ix # contains repetitions, contrasts
+                            image.image_series_index = series_ix # contains repetitions, contrasts
                             image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
+                            image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
+                            image.user_float[:3] = prot_arrays['Directions'][phs]
                             image.attribute_string = xml
                             images.append(image)
 
@@ -372,10 +374,23 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
     if n_bval > 0 and len(prot_arrays) > 0:
-        mask = fmap['mask']
+        mask = fmap['mask'][slc_sel]
         adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
-        print(adc_maps.shape)
+        scale = 0.8 / adc_maps.max()
+        adc_maps *= 32767 * scale
+        adc_maps = np.around(adc_maps)
+        adc_maps = adc_maps.astype(np.int16)
 
+        series_ix += 1
+        img_ix = 0
+        for adc_map in adc_maps:
+            image = ismrmrd.Image.from_array(adc_map)
+            image.image_index = img_ix # contains slices/partitions and phases
+            image.image_series_index = series_ix # contains repetitions, contrasts
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+            img_ix += 1
         # save as ISMRMRD images and append b-values in Image Metadata
 
     return images
@@ -384,6 +399,10 @@ def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
 
     def geom_mean(arr, axis):
         return (np.prod(arr, axis=axis))**(1.0/3.0)
+
+    # we need to convert back to float for some operations
+    b0 = b0.astype(np.float32)
+    diffw_imgs = diffw_imgs.astype(np.float32)
 
     b_val = prot_arrays['b_values']
     n_bval = b_val.shape[0] - 1
