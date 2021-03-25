@@ -365,8 +365,9 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
                             image.image_index = img_ix # contains slices/partitions and phases
                             image.image_series_index = series_ix # contains repetitions, contrasts
                             image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
-                            image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
-                            image.user_float[:3] = prot_arrays['Directions'][phs]
+                            if len(prot_arrays) > 0:
+                                image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
+                                image.user_float[:3] = prot_arrays['Directions'][phs]
                             image.attribute_string = xml
                             images.append(image)
 
