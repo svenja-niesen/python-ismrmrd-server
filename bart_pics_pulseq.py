@@ -184,7 +184,7 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
         if enc2 > enc2_max:
             enc2_max = enc2
 
-    nx = metadata.encoding[0].encodedSpace.matrixSize.x
+    nx = 2*metadata.encoding[0].encodedSpace.matrixSize.x
     ny = metadata.encoding[0].encodedSpace.matrixSize.y
     nz = metadata.encoding[0].encodedSpace.matrixSize.z
 
@@ -297,19 +297,33 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     logging.debug("Image without oversampling is size %s" % (data.shape,))
     np.save(debugFolder + "/" + "imgCrop.npy", data)
 
-    # Format as ISMRMRD image data
-    image = ismrmrd.Image.from_array(data, acquisition=group[0])
-    image.image_index = 1
-
     # Set ISMRMRD Meta Attributes
     meta = ismrmrd.Meta({'DataRole':               'Image',
                          'ImageProcessingHistory': ['FIRE', 'PYTHON'],
                          'WindowCenter':           '16384',
                          'WindowWidth':            '32768'})
     xml = meta.serialize()
+
+    # Format as ISMRMRD image data
+    n_par = data.shape[-1]
+    images = []
+    if n_par > 1:
+        for par in range(n_par):
+            image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
+            image.image_index = 1 + par # contains image index (slices/partitions)
+            image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+    else:
+        image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
+        image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
+        image.slice = 0
+        image.attribute_string = xml
+        images.append(image)
+
     logging.debug("Image MetaAttributes: %s", xml)
-    logging.debug("Image data has %d elements", image.data.size)
+    logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
-    image.attribute_string = xml
-
-    return image
+    return images
