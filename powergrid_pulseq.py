@@ -375,7 +375,9 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
     if n_bval > 0 and len(prot_arrays) > 0:
-        mask = fmap['mask'][slc_sel]
+        mask = fmap['mask']
+        if slc_sel is not None:
+            mask = mask[slc_sel]
         adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
         scale = 0.8 / adc_maps.max()
         adc_maps *= 32767 * scale
@@ -436,7 +438,7 @@ def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
     else:
         adc_map = np.polynomial.polynomial.polyfit(b_val[1:], trace_log.reshape([-1,n_bval]).T, 1)[1,].T.reshape(imgshape)
 
-    adc_map = adc_map * mask
+    adc_map *= mask
 
     return adc_map
 
