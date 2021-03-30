@@ -172,8 +172,12 @@ def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
             raise ValueError("The number of samples exceed the maximum allowed number of 65535 (uint16 maximum).")
 
         dwelltime = 1e-6*prot_hdr.userParameters.userParameterDouble[0].value_ # [s]
-        t_min = prot_hdr.userParameters.userParameterDouble[3].value_ # [s]
-        t_vec = t_min + dwelltime * np.arange(nsamples_full) # time vector for B0 correction
+        try:
+            t_min = prot_hdr.userParameters.userParameterDouble[3].value_ # [s]
+            t_vec = t_min + dwelltime * np.arange(nsamples_full) # time vector for B0 correction
+        except:
+            # just a fallback for older versions, where t_min was not saved in the protocol
+            t_vec = None
 
         # save data as it gets corrupted by the resizing, dims are [nc, samples]
         data_tmp = dset_acq.data[:] 
@@ -186,7 +190,10 @@ def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
         dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
         dset_acq.traj[:,:3] = reco_trj.copy()
-        dset_acq.traj[:,3] = t_vec
+        if t_vec is not None:
+            dset_acq.traj[:,3] = t_vec
+        else:
+            dset_acq.traj[:,3] = np.zeros(nsamples_full)
 
         prot.close()
     
