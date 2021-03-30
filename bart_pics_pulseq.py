@@ -1,7 +1,6 @@
 
-""" DRAFT Pulseq Reco for Cartesian datasets
+""" Pulseq Reco for Cartesian datasets
 
-NOT TESTED YET
 """
 
 import ismrmrd
@@ -65,7 +64,7 @@ def process(connection, config, metadata):
     insert_hdr(prot_file, metadata)
 
     # Continuously parse incoming data parsed from MRD messages
-    acqGroup = []
+    acqGroup = [[] for _ in range(256)]
     noiseGroup = []
     waveformGroup = []
 
@@ -104,8 +103,7 @@ def process(connection, config, metadata):
                     acsGroup[item.idx.slice].append(item)
                     continue
 
-
-                acqGroup.append(item)
+                acqGroup[item.idx.slice].append(item)
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
@@ -114,10 +112,9 @@ def process(connection, config, metadata):
                     if sensmaps[item.idx.slice] is None:
                         # run parallel imaging calibration
                         sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
-                    image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                    image = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending image to client:\n%s", image)
                     connection.send_image(image)
-                    acqGroup = []
 
             # ----------------------------------------------------------
             # Image data messages
