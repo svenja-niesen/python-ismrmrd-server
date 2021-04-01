@@ -63,7 +63,7 @@ class Server:
 
             # Second messages is the metadata (text)
             metadata_xml = next(connection)
-            logging.debug("XML Metadata: %s", metadata_xml)
+            # logging.debug("XML Metadata: %s", metadata_xml)
             try:
                 metadata = ismrmrd.xsd.CreateFromDocument(metadata_xml)
                 if (metadata.acquisitionSystemInformation.systemFieldStrength_T != None):
@@ -88,18 +88,11 @@ class Server:
                 logging.info("Starting bart_spiral processing based on config")
                 bart_spiral.process(connection, config, metadata)
             elif (config == "bart_pulseq"):
-                if metadata.encoding[0].trajectory == 'spiral':
-                    import bart_pulseq
-                    import importlib
-                    importlib.reload(bart_pulseq)
-                    logging.info("Starting bart_pulseq processing based on config")
-                    bart_pulseq.process(connection, config, metadata)
-                if metadata.encoding[0].trajectory == 'cartesian':
-                    import bart_pics_pulseq
-                    import importlib
-                    importlib.reload(bart_pics_pulseq)
-                    logging.info("Starting bart_pulseq processing based on config")
-                    bart_pics_pulseq.process(connection, config, metadata)
+                import bart_pulseq
+                import importlib
+                importlib.reload(bart_pulseq)
+                logging.info("Starting bart_pulseq processing based on config")
+                bart_pulseq.process(connection, config, metadata)
             elif (config == "powergrid_pulseq"):
                 import powergrid_pulseq
                 import importlib
