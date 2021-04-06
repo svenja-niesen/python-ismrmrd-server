@@ -148,15 +148,16 @@ def process_cartesian(connection, config, metadata):
         # happen if the trigger condition for these groups are not met.
         # This is also a fallback for handling image data, as the last
         # image in a series is typically not separately flagged.
-        if len(acqGroup) > 0:
-            logging.info("Processing a group of k-space data (untriggered)")
-            if sensmaps[item.idx.slice] is None:
-                # run parallel imaging calibration
-                sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
-            image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
-            logging.debug("Sending image to client:\n%s", image)
-            connection.send_image(image)
-            acqGroup = []
+        if item is not None:
+            if len(acqGroup) > 0:
+                logging.info("Processing a group of k-space data (untriggered)")
+                if sensmaps[item.idx.slice] is None:
+                    # run parallel imaging calibration
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
+                image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                logging.debug("Sending image to client:\n%s", image)
+                connection.send_image(image)
+                acqGroup = []
 
     finally:
         connection.send_close()
@@ -280,13 +281,18 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     # Normalize and convert to int16
     # save one scaling in 'static' variable
-    try:
-        process_raw.imascale
-    except:
-        process_raw.imascale = 0.8 / data.max()
+
+    ### WIP: save different scales for different contrasts - e.g. using the contrast parameter ###
+    ### for now, we will rescale for each image individually ###
+    # try:
+    #     process_raw.imascale
+    # except:
+    process_raw.imascale = 0.8 / data.max()
     data *= 32767 * process_raw.imascale
     data = np.around(data)
     data = data.astype(np.int16)
+
+    np.save(debugFolder + "/" + "img.npy", data)
 
     # Remove readout oversampling
     nRO = np.size(data,0)
