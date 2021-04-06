@@ -59,6 +59,12 @@ def process_spiral(connection, config, metadata):
     
     logging.info("Config: \n%s", config)
 
+    # Check for GPU availability
+    if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
+        gpu = True
+    else:
+        gpu = False
+
     # Metadata should be MRD formatted header, but may be a string
     # if it failed conversion earlier
 
@@ -67,7 +73,7 @@ def process_spiral(connection, config, metadata):
         # logging.info("Metadata: \n%s", metadata.serialize())
 
         logging.info("Incoming dataset contains %d encodings", len(metadata.encoding))
-        logging.info("First encoding is of type '%s', with a matrix size of (%s x %s x %s) and a field of view of (%s x %s x %s)mm^3", 
+        logging.info("Trajectory type '%s', matrix size (%s x %s x %s), field of view (%s x %s x %s)mm^3", 
             metadata.encoding[0].trajectory, 
             metadata.encoding[0].encodedSpace.matrixSize.x, 
             metadata.encoding[0].encodedSpace.matrixSize.y, 
@@ -128,7 +134,7 @@ def process_spiral(connection, config, metadata):
                     continue
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
-                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
 
                 if item.idx.segment == 0:
                     acqGroup[item.idx.slice].append(item)
@@ -142,7 +148,7 @@ def process_spiral(connection, config, metadata):
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
+                    images = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -197,7 +203,7 @@ def process_spiral(connection, config, metadata):
 # Process Data
 #########################
 
-def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
+def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
 
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     ny = metadata.encoding[0].encodedSpace.matrixSize.y
@@ -209,31 +215,40 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     data, trj = sort_spiral_data(group, metadata, dmtx)
 
-    logging.debug("Raw data is size %s" % (data.shape,))
-    logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
+    #logging.debug("Raw data is size %s" % (data.shape,))
+    #logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
+    if gpu:
+        nufft_config = 'nufft -g -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz)
+        ecalib_config = 'ecalib -g -m 1 -I'
+        pics_config = 'pics -g -S -e -l1 -r 0.001 -i 50 -t'
+    else:
+        nufft_config = 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz)
+        ecalib_config = 'ecalib -m 1 -I'
+        pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
+
     force_pics = True
     if sensmaps is None and force_pics:
-        sensmaps = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        sensmaps = bart(1, nufft_config, trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
-        sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
+        sensmaps = bart(1, ecalib_config, sensmaps)  # ESPIRiT calibration
 
     if sensmaps is None:
         logging.debug("no pics necessary, just do standard recon")
             
         # bart nufft
-        data = bart(1, 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz), trj, data) # nufft
+        data = bart(1, nufft_config, trj, data) # nufft
         # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
 
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
         # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
-        data = bart(1, 'pics -S -e -l1 -r 0.001 -i 50 -t', trj, data, sensmaps)
+        data = bart(1, pics_config , trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
         while np.ndim(data) < 3:
@@ -288,12 +303,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
         image.attribute_string = xml
         images.append(image)
 
-    logging.debug("Image MetaAttributes: %s", xml)
-    logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
+    # logging.debug("Image MetaAttributes: %s", xml)
+    # logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
     return images
 
-def process_acs(group, config, metadata, dmtx=None):
+def process_acs(group, config, metadata, dmtx=None, gpu=False):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
         data = remove_os(data)
@@ -306,7 +321,11 @@ def process_acs(group, config, metadata, dmtx=None):
         data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
-        sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
+        if gpu:
+            sensmaps = bart(1, 'ecalib -g -m 1 -k 8 -I', data)  # ESPIRiT calibration
+        else:
+            sensmaps = bart(1, 'ecalib -m 1 -k 8 -I', data)  # ESPIRiT calibration
+
         np.save(debugFolder + "/" + "acs.npy", data)
         np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
         return sensmaps
@@ -359,7 +378,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     # rearrange trj & sig for bart
     trj = np.transpose(trj, [1, 2, 0]) # [3, ncol, nacq]
     sig = np.transpose(sig, [2, 0, 1])[np.newaxis]
-    logging.debug("trj.shape = %s, sig.shape = %s"%(trj.shape, sig.shape))
+    logging.debug("Trajectory shape = %s , Signal Shape = %s "%(trj.shape, sig.shape))
     
     np.save(debugFolder + "/" + "trj.npy", trj)
 
