@@ -56,7 +56,7 @@ def process(connection, config, metadata):
         prot_filename += "_skopetraj"
 
     # Check if local protocol folder is available - if not use protFolder (scanner)
-    date = prot_filename.split('_')[0] # folder in ParametersProcessedData (=date of seqfile)
+    date = prot_filename.split('_')[0] # folder in Protocols (=date of seqfile)
     protFolder_loc = os.path.join(protFolder_local, date)
     if os.path.exists(protFolder_loc):
         protFolder = protFolder_loc
@@ -315,24 +315,7 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     data = np.transpose(data, [3,4,2,1,0,5,6,7]).mean(axis=0)
 
     logging.debug("Image data is size %s" % (data.shape,))
-
-    # Normalize and convert to int16
-    # save one scaling in 'static' variable
-    try:
-        process_raw.imascale
-    except:
-        process_raw.imascale = 0.8 / data.max()
-    data *= 32767 * process_raw.imascale
-    data = np.around(data)
-    data = data.astype(np.int16)
-
-    # Set ISMRMRD Meta Attributes
-    meta = ismrmrd.Meta({'DataRole':               'Image',
-                         'ImageProcessingHistory': ['FIRE', 'PYTHON'],
-                         'WindowCenter':           '16384',
-                         'WindowWidth':            '32768'})
-    xml = meta.serialize()
-    
+   
     images = []
     dsets = []
 
@@ -349,6 +332,32 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         dsets.append(diffw_imgs)
     else:
         dsets.append(data)
+
+    # Diffusion evaluation
+    if n_bval > 0 and len(prot_arrays) > 0:
+        mask = fmap['mask']
+        if slc_sel is not None:
+            mask = mask[slc_sel]
+        adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
+        scale = 0.8 / adc_maps.max()
+        adc_maps *= 32767 * scale
+        adc_maps = np.around(adc_maps)
+        adc_maps = adc_maps.astype(np.int16)
+        dsets.append(adc_maps)
+
+    
+    # Normalize and convert to int16
+    for dset in dsets:
+        dset *= 32767 * 0.8 / dset.max()
+        dset = np.around(dset)
+        dset = dset.astype(np.int16)
+
+    # Set ISMRMRD Meta Attributes
+        meta = ismrmrd.Meta({'DataRole':               'Image',
+                            'ImageProcessingHistory': ['FIRE', 'PYTHON'],
+                            'WindowCenter':           '16384',
+                            'WindowWidth':            '32768'})
+        xml = meta.serialize()
 
     series_ix = 0
     for data_ix,data in enumerate(dsets):
@@ -374,38 +383,12 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
 
-    if n_bval > 0 and len(prot_arrays) > 0:
-        mask = fmap['mask']
-        if slc_sel is not None:
-            mask = mask[slc_sel]
-        adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
-        scale = 0.8 / adc_maps.max()
-        adc_maps *= 32767 * scale
-        adc_maps = np.around(adc_maps)
-        adc_maps = adc_maps.astype(np.int16)
-
-        series_ix += 1
-        img_ix = 0
-        for adc_map in adc_maps:
-            image = ismrmrd.Image.from_array(adc_map)
-            image.image_index = img_ix # contains slices/partitions and phases
-            image.image_series_index = series_ix # contains repetitions, contrasts
-            image.slice = 0
-            image.attribute_string = xml
-            images.append(image)
-            img_ix += 1
-        # save as ISMRMRD images and append b-values in Image Metadata
-
     return images
 
 def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
 
     def geom_mean(arr, axis):
         return (np.prod(arr, axis=axis))**(1.0/3.0)
-
-    # we need to convert back to float for some operations
-    b0 = b0.astype(np.float32)
-    diffw_imgs = diffw_imgs.astype(np.float32)
 
     b_val = prot_arrays['b_values']
     n_bval = b_val.shape[0] - 1
