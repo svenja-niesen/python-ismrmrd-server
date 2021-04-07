@@ -304,7 +304,7 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     # Comment from Alex Cerjanic, who built PowerGrid: 'histo' option can generate a bad set of interpolators in edge cases
     # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
     # However, histo lead to quite nice results so far & does not need as many time segments
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=0, 
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=5000, 
                                 ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
@@ -341,12 +341,11 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
         dsets.append(adc_maps)
 
-    
     # Normalize and convert to int16
-    for dset in dsets:
-        dset *= 32767 * 0.8 / dset.max()
-        dset = np.around(dset)
-        dset = dset.astype(np.int16)
+    for k in range(len(dsets)):
+        dsets[k] *= 32767 * 0.8 / dsets[k].max()
+        dsets[k] = np.around(dsets[k])
+        dsets[k] = dsets[k].astype(np.int16)
 
     # Set ISMRMRD Meta Attributes
         meta = ismrmrd.Meta({'DataRole':               'Image',
