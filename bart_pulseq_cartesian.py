@@ -73,6 +73,9 @@ def process_cartesian(connection, config, metadata):
     sensmaps = [None] * 256
     dmtx = None
 
+    # different contrasts need different scaling
+    process_raw.imascale = [None] * 256
+
     try:
         for acq_ctr, item in enumerate(connection):
             # ----------------------------------------------------------
@@ -82,7 +85,6 @@ def process_cartesian(connection, config, metadata):
 
                 insert_acq(prot_file, item, acq_ctr, noncartesian=False)
 
-                # wip: run noise decorrelation
                 if item.is_flag_set(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
                     noiseGroup.append(item)
                     continue
@@ -95,13 +97,17 @@ def process_cartesian(connection, config, metadata):
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
                 
-                
                 # Accumulate all imaging readouts in a group
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
+                    continue
+                elif item.is_flag_set(ismrmrd.ACQ_IS_DUMMYSCAN_DATA): # skope sync scans
                     continue
                 elif item.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
                     acsGroup[item.idx.slice].append(item)
                     continue
+                elif sensmaps[item.idx.slice] is None:
+                    # run parallel imaging calibration
+                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
 
                 acqGroup[item.idx.slice].append(item)
 
@@ -109,9 +115,6 @@ def process_cartesian(connection, config, metadata):
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    if sensmaps[item.idx.slice] is None:
-                        # run parallel imaging calibration
-                        sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
                     image = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending image to client:\n%s", image)
                     connection.send_image(image)
@@ -282,13 +285,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     # Normalize and convert to int16
     # save one scaling in 'static' variable
 
-    ### WIP: save different scales for different contrasts - e.g. using the contrast parameter ###
-    ### for now, we will rescale for each image individually ###
-    # try:
-    #     process_raw.imascale
-    # except:
-    process_raw.imascale = 0.8 / data.max()
-    data *= 32767 * process_raw.imascale
+    contr = group[0].idx.contrast
+    if process_raw.imascale[contr] is None:
+        process_raw.imascale[contr] = 0.8 / data.max()
+    data *= 32767 * process_raw.imascale[contr]
     data = np.around(data)
     data = data.astype(np.int16)
 
