@@ -339,10 +339,6 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
         if slc_sel is not None:
             mask = mask[slc_sel]
         adc_maps = process_diffusion_images(b0, diffw_imgs, prot_arrays, mask)
-        scale = 0.8 / adc_maps.max()
-        adc_maps *= 32767 * scale
-        adc_maps = np.around(adc_maps)
-        adc_maps = adc_maps.astype(np.int16)
         dsets.append(adc_maps)
 
     
