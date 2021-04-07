@@ -358,23 +358,36 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     series_ix = 0
     for data_ix,data in enumerate(dsets):
         # Format as ISMRMRD image data
-        for rep in range(data.shape[0]):
-            for contr in range(data.shape[1]):
-                series_ix += 1
-                img_ix = 0
-                for phs in range(data.shape[2]):
-                    for slc in range(data.shape[3]):
-                        for nz in range(data.shape[4]):
-                            img_ix += 1
-                            image = ismrmrd.Image.from_array(data[rep,contr,phs,slc,nz])
-                            image.image_index = img_ix # contains slices/partitions and phases
-                            image.image_series_index = series_ix # contains repetitions, contrasts
-                            image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
-                            if len(prot_arrays) > 0:
-                                image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
-                                image.user_float[:3] = prot_arrays['Directions'][phs]
-                            image.attribute_string = xml
-                            images.append(image)
+        if data_ix < 2:
+            for rep in range(data.shape[0]):
+                for contr in range(data.shape[1]):
+                    series_ix += 1
+                    img_ix = 0
+                    for phs in range(data.shape[2]):
+                        for slc in range(data.shape[3]):
+                            for nz in range(data.shape[4]):
+                                img_ix += 1
+                                image = ismrmrd.Image.from_array(data[rep,contr,phs,slc,nz])
+                                image.image_index = img_ix # contains slices/partitions and phases
+                                image.image_series_index = series_ix # contains repetitions, contrasts
+                                image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
+                                if len(prot_arrays) > 0:
+                                    image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
+                                    image.user_float[:3] = prot_arrays['Directions'][phs]
+                                image.attribute_string = xml
+                                images.append(image)
+        else:
+            # atm only ADC maps
+            series_ix += 1
+            img_ix = 0
+            for img in data:
+                img_ix += 1
+                image = ismrmrd.Image.from_array(img)
+                image.image_index = img_ix
+                image.image_series_index = series_ix
+                image.slice = 0
+                image.attribute_string = xml
+                images.append(image)
 
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
@@ -550,3 +563,4 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
     kspace = np.transpose(kspace, [3, 0, 1, 2])
 
     return kspace
+    
