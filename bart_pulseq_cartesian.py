@@ -12,7 +12,7 @@ import numpy.fft as fft
 import base64
 
 from bart import bart
-from reco_helper import calculate_prewhitening, apply_prewhitening, fov_shift, calc_rotmat, pcs_to_gcs
+from reco_helper import calculate_prewhitening, apply_prewhitening, fov_shift, calc_rotmat, pcs_to_gcs, remove_os
 from pulseq_prot import insert_hdr, insert_acq
 
 # Folder for sharing data/debugging
@@ -233,6 +233,7 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
 def process_acs(group, config, metadata, dmtx=None):
     if len(group)>0:
         data = sort_into_kspace(group, metadata, dmtx, zf_around_center=True)
+        data = remove_os(data)
 
         # fov shift
         rotmat = calc_rotmat(group[0])
@@ -252,6 +253,7 @@ def process_acs(group, config, metadata, dmtx=None):
 def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     data = sort_into_kspace(group, metadata, dmtx)
+    data = remove_os(data)
 
     # fov shift
     rotmat = calc_rotmat(group[0])
@@ -294,12 +296,6 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
 
     np.save(debugFolder + "/" + "img.npy", data)
 
-    # Remove readout oversampling
-    nRO = np.size(data,0)
-    data = data[int(nRO/4):int(nRO*3/4),:]
-    logging.debug("Image without oversampling is size %s" % (data.shape,))
-    np.save(debugFolder + "/" + "imgCrop.npy", data)
-
     # Set ISMRMRD Meta Attributes
     meta = ismrmrd.Meta({'DataRole':               'Image',
                          'ImageProcessingHistory': ['FIRE', 'PYTHON'],
@@ -312,14 +308,14 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     images = []
     if n_par > 1:
         for par in range(n_par):
-            image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
+            image = ismrmrd.Image.from_array(data[...,par].T, acquisition=group[0])
             image.image_index = 1 + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
     else:
-        image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
+        image = ismrmrd.Image.from_array(data[...,0].T, acquisition=group[0])
         image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
