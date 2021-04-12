@@ -11,7 +11,7 @@ from PowerGridPy import PowerGridIsmrmrd
 from cfft import cfftn, cifftn
 
 from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
-from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os
+from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os, filt_ksp
 
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
     Reconstruction is done with the BART toolbox and the PowerGrid toolbox
@@ -156,16 +156,21 @@ def process(connection, config, metadata):
                     acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
                 if item.idx.segment == nsegments - 1:
-                    # Inplane FOV shift and noise whitening
-                    rotmat = calc_rotmat(item)
-                    shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
+                    # Noise whitening
                     if dmtx is None:
                         data = acqGroup[item.idx.slice][-1].data[:]
                     else:
                         data = apply_prewhitening(acqGroup[item.idx.slice][-1].data[:], dmtx)
+
+                    # In-Plane FOV-shift
+                    rotmat = calc_rotmat(item)
+                    shift = pcs_to_gcs(np.asarray(item.position), rotmat) / res
                     traj = np.swapaxes(acqGroup[item.idx.slice][-1].traj[:,:3],0,1)
                     traj = traj[[1,0,2],:]  # switch x and y dir for correct orientation
-                    acqGroup[item.idx.slice][-1].data[:] = fov_shift_spiral(data, traj, shift, matr_sz)
+                    data = fov_shift_spiral(data, traj, shift, matr_sz)
+
+                    # filter signal to avoid Gibbs Ringing
+                    acqGroup[item.idx.slice][-1].data[:] = filt_ksp(data, traj, filt_fac=0.95)
 
                 # if no refscan, calculate sensitivity maps from raw data
                 if sensmaps[item.idx.slice] is None:
@@ -254,9 +259,9 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     if slc_sel is not None:
         fmap_data = fmap_data[slc_sel]
 
-    print("Field Map name:", fmap['name'].item())
+    logging.debug("Field Map name: %s", fmap['name'].item())
     if 'params' in fmap:
-        print("Field Map regularisation parameters:",  fmap['params'].item())
+        logging.debug("Field Map regularisation parameters: %s",  fmap['params'].item())
     dset_tmp.append_array('FieldMap', fmap_data) # dimensions in PowerGrid seem to be [slices/nz,ny,nx]
 
     # Insert Sensitivity Maps
@@ -304,7 +309,7 @@ def process_raw(acqGroup, metadata, sensmaps, prot_arrays, slc_sel=None):
     # Comment from Alex Cerjanic, who built PowerGrid: 'histo' option can generate a bad set of interpolators in edge cases
     # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
     # However, histo lead to quite nice results so far & does not need as many time segments
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=5000, 
+    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=0, 
                                 ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT')
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)

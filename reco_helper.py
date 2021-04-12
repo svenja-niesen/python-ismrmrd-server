@@ -217,8 +217,8 @@ def fov_shift_spiral_reapply(acq, base_trj, matr_sz, res):
     return sig
 
     
-def filt_end(kspace, traj, filt_fac=0.95):
-    """filter kspace data with hanning filter on last axis at end of spiral
+def filt_ksp(kspace, traj, filt_fac=0.95):
+    """filter outer kspace data with hanning filter to avoid Gibbs Ringing
 
     kspace:   kspace data [coils, samples]
     traj:     k-space trajectory [dim, samples]
