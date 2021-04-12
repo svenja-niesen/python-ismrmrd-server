@@ -234,4 +234,4 @@ def filt_end(kspace, traj, filt_fac=0.95):
     filt_len = len(filt) - np.count_nonzero(filt)
     filt[filt == 0] = hanning(2*filt_len)[filt_len:]
     
-    return kspace * filt, filt
+    return kspace * filt
