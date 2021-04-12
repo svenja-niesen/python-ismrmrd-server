@@ -3,7 +3,8 @@
 
 import numpy as np
 
-# from ismrmdrdtools (wip: import from ismrmrdtools instead)
+# These are copied from ismrmrdtools.coils, which depends on scipy
+# (wip: import from ismrmrdtools and add scipy to container image)
 def calculate_prewhitening(noise, scale_factor=1.0):
     '''Calculates the noise prewhitening matrix
 
@@ -27,6 +28,18 @@ def calculate_prewhitening(noise, scale_factor=1.0):
 
     return R
 
+def apply_prewhitening(data, dmtx):
+    '''Apply the noise prewhitening matrix
+
+    :param noise: Input noise data (array or matrix), ``[coil, ...]``
+    :param dmtx: Input noise prewhitening matrix
+
+    :returns w_data: Prewhitened data, ``[coil, ...]``,
+    '''
+
+    s = data.shape
+    return np.asarray(np.asmatrix(dmtx)*np.asmatrix(data.reshape(data.shape[0],data.size//data.shape[0]))).reshape(s)
+
 def calc_rotmat(acq):
         phase_dir = np.asarray(acq.phase_dir)
         read_dir = np.asarray(acq.read_dir)
@@ -42,19 +55,6 @@ def remove_os(data, axis=0):
     data = np.fft.fft(data, axis=axis)
     return data
 
-
-def apply_prewhitening(data, dmtx):
-    '''Apply the noise prewhitening matrix
-
-    :param noise: Input noise data (array or matrix), ``[coil, ...]``
-    :param dmtx: Input noise prewhitening matrix
-
-    :returns w_data: Prewhitened data, ``[coil, ...]``,
-    '''
-
-    s = data.shape
-    return np.asarray(np.asmatrix(dmtx)*np.asmatrix(data.reshape(data.shape[0],data.size//data.shape[0]))).reshape(s)
-    
 def pcs_to_dcs(grads, patient_position='HFS'):
     """ Convert from patient coordinate system (PCS, physical) 
         to device coordinate system (DCS, physical)
@@ -215,3 +215,23 @@ def fov_shift_spiral_reapply(acq, base_trj, matr_sz, res):
     sig *= np.exp(1j*(shift[0]*np.pi*pred_trj[:,0]/kmax-shift[1]*np.pi*pred_trj[:,1]/kmax))
 
     return sig
+
+    
+def filt_end(kspace, traj, filt_fac=0.95):
+    """filter kspace data with hanning filter on last axis at end of spiral
+
+    kspace:   kspace data [coils, samples]
+    traj:     k-space trajectory [dim, samples]
+
+    filt_fac: filtering is done after filt_fac * max_radius is reached, 
+              where max_radius is the maximum radius of the spiral
+    """
+    from numpy import hanning
+
+    filt = np.sqrt(traj[0]**2+traj[1]**2) # trajectory radius
+    filt[filt < filt_fac*np.max(filt)] = 1
+    filt[filt >= filt_fac*np.max(filt)] = 0
+    filt_len = len(filt) - np.count_nonzero(filt)
+    filt[filt == 0] = hanning(2*filt_len)[filt_len:]
+    
+    return kspace * filt, filt
