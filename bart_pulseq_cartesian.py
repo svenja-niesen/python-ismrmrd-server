@@ -64,12 +64,14 @@ def process_cartesian(connection, config, metadata):
     insert_hdr(prot_file, metadata)
 
     # Continuously parse incoming data parsed from MRD messages
-    acqGroup = [[] for _ in range(256)]
+    n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
+
+    acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
     waveformGroup = []
 
-    # hard-coded limit of 256 slices (better: use Nslice from protocol)
-    acsGroup = [[] for _ in range(256)]
+    acsGroup = [[] for _ in range(n_slc)]
     sensmaps = [None] * 256
     dmtx = None
 
@@ -109,13 +111,13 @@ def process_cartesian(connection, config, metadata):
                     # run parallel imaging calibration
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
 
-                acqGroup[item.idx.slice].append(item)
+                acqGroup[item.idx.contrast][item.idx.slice].append(item)
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    image = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
+                    image = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending image to client:\n%s", image)
                     connection.send_image(image)
 
@@ -157,7 +159,7 @@ def process_cartesian(connection, config, metadata):
                 if sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
-                image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                image = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                 logging.debug("Sending image to client:\n%s", image)
                 connection.send_image(image)
                 acqGroup = []
@@ -304,19 +306,20 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     xml = meta.serialize()
 
     # Format as ISMRMRD image data
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
     n_par = data.shape[-1]
     images = []
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par].T, acquisition=group[0])
-            image.image_index = 1 + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_contr + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
     else:
         image = ismrmrd.Image.from_array(data[...,0].T, acquisition=group[0])
-        image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_index = 1 + group[0].idx.contrast * n_contr + group[0].idx.slice # contains image index (slices/partitions)
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
         image.attribute_string = xml

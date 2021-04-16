@@ -87,8 +87,9 @@ def process_spiral(connection, config, metadata):
 
     # Continuously parse incoming data parsed from MRD messages
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
 
-    acqGroup = [[] for _ in range(n_slc)]
+    acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
     waveformGroup = []
 
@@ -137,18 +138,18 @@ def process_spiral(connection, config, metadata):
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
 
                 if item.idx.segment == 0:
-                    acqGroup[item.idx.slice].append(item)
+                    acqGroup[item.idx.contrast][item.idx.slice].append(item)
                 else:
                     # append data to first segment of ADC group
                     idx_lower = item.idx.segment * item.number_of_samples
                     idx_upper = (item.idx.segment+1) * item.number_of_samples
-                    acqGroup[item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
+                    acqGroup[item.idx.contrast][item.idx.slice][-1].data[:,idx_lower:idx_upper] = item.data[:]
 
                 # When this criteria is met, run process_raw() on the accumulated
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup[item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu)
+                    images = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
 
@@ -185,12 +186,12 @@ def process_spiral(connection, config, metadata):
         # This is also a fallback for handling image data, as the last
         # image in a series is typically not separately flagged.
         if item is not None:
-            if len(acqGroup[item.idx.slice]) > 0:
+            if len(acqGroup[item.idx.contrast][item.idx.slice]) > 0:
                 logging.info("Processing a group of k-space data (untriggered)")
                 if sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
-                image = process_raw(acqGroup, config, metadata, dmtx, sensmaps[item.idx.slice])
+                image = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                 logging.debug("Sending image to client:\n%s", image)
                 connection.send_image(image)
                 acqGroup = []
@@ -285,19 +286,20 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
     images = []
     n_par = data.shape[-1]
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
 
     # Format as ISMRMRD image data - WIP: something goes wrong here with indexes
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-            image.image_index = 1 + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_contr + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
     else:
         image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
-        image.image_index = 1 + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_index = 1 + group[0].idx.contrast * n_contr + group[0].idx.slice # contains image index (slices/partitions)
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
         image.attribute_string = xml
