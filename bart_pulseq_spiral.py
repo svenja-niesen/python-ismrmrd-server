@@ -38,6 +38,8 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 
 def process_spiral(connection, config, metadata):
   
+    slc_sel = None
+
     # Create folder, if necessary
     if not os.path.exists(debugFolder):
         os.makedirs(debugFolder)
@@ -124,6 +126,9 @@ def process_spiral(connection, config, metadata):
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
                 
+                # skip slices in single slice reconstruction
+                if slc_sel is not None and item.idx.slice != slc_sel:
+                    continue
                 
                 # Accumulate all imaging readouts in a group
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
@@ -232,7 +237,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
         ecalib_config = 'ecalib -m 1 -I'
         pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
 
-    force_pics = True
+    force_pics = False
     if sensmaps is None and force_pics:
         sensmaps = bart(1, nufft_config, trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
@@ -243,12 +248,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
             
         # bart nufft
         data = bart(1, nufft_config, trj, data) # nufft
-        # data = bart(1, 'nufft -i -t -c', trj, data) # nufft
 
         # Sum of squares coil combination
         data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
     else:
-        # data = bart(1, 'pics -e -l1 -r 0.001 -i 25 -t', trj, data, sensmaps)
         data = bart(1, pics_config , trj, data, sensmaps)
         data = np.abs(data)
         # make sure that data is at least 3d:
