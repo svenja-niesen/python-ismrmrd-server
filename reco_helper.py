@@ -244,4 +244,4 @@ def filt_ksp(kspace, traj, filt_fac=0.95):
     elif filt[-1] == -1: # end (e.g. spiral out)
         filt[-filt_len:] = hamming(2*filt_len)[filt_len:]
 
-    return kspace * filt, filt
+    return kspace * filt
