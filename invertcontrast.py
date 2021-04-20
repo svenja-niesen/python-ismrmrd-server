@@ -5,9 +5,11 @@ import itertools
 import logging
 import numpy as np
 import numpy.fft as fft
+import xml.dom.minidom
 import base64
 import ctypes
 import re
+import mrdhelper
 
 # Folder for debug output files
 debugFolder = "/tmp/share/debug"
@@ -36,6 +38,7 @@ def process(connection, config, metadata):
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
     # Continuously parse incoming data parsed from MRD messages
+    currentSeries = 0
     acqGroup = []
     imgGroup = []
     waveformGroup = []
@@ -63,8 +66,8 @@ def process(connection, config, metadata):
             # Image data messages
             # ----------------------------------------------------------
             elif isinstance(item, ismrmrd.Image):
-                # Only process magnitude images -- send phase images back without modification
-                if item.image_type is ismrmrd.IMTYPE_MAGNITUDE:
+                # Only process magnitude images -- send phase images back without modification (fallback for images with unknown type)
+                if (item.image_type is ismrmrd.IMTYPE_MAGNITUDE) or (item.image_type == 0):
                     imgGroup.append(item)
                 else:
                     tmpMeta = ismrmrd.Meta.deserialize(item.attribute_string)
@@ -76,9 +79,10 @@ def process(connection, config, metadata):
 
                 # When this criteria is met, run process_group() on the accumulated
                 # data, which returns images that are sent back to the client.
-                # TODO: logic for grouping images
-                if False:
-                    logging.info("Processing a group of images")
+                # e.g. when the series number changes:
+                if item.image_series_index != currentSeries:
+                    logging.info("Processing a group of images because series index changed to %d", item.image_series_index)
+                    currentSeries = item.image_series_index
                     image = process_image(imgGroup, config, metadata)
                     connection.send_image(image)
                     imgGroup = []
@@ -198,7 +202,7 @@ def process_raw(group, config, metadata):
         tmpImg = ismrmrd.Image.from_array(data[...,phs].transpose())
 
         # Set the header information
-        tmpImg.setHead(update_img_header_from_raw(tmpImg.getHead(), rawHead[phs]))
+        tmpImg.setHead(mrdhelper.update_img_header_from_raw(tmpImg.getHead(), rawHead[phs]))
         tmpImg.field_of_view = (ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.x), 
                                 ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.y), 
                                 ctypes.c_float(metadata.encoding[0].reconSpace.fieldOfView_mm.z))
@@ -287,112 +291,60 @@ def process_image(images, config, metadata):
         oldHeader = head[iImg]
         oldHeader.data_type = data_type
 
+        # Unused example, as images are grouped by series before being passed into this function now
+        # oldHeader.image_series_index = currentSeries
+
         # Increment series number when flag detected (i.e. follow ICE logic for splitting series)
-        oldHeader.image_series_index = currentSeries
-        if get_meta_value(meta[iImg], 'IceMiniHead') is not None:
-            if extract_minihead_bool_param(base64.b64decode(meta[iImg]['IceMiniHead']).decode('utf-8'), 'BIsSeriesEnd') is True:
+        if mrdhelper.get_meta_value(meta[iImg], 'IceMiniHead') is not None:
+            if mrdhelper.extract_minihead_bool_param(base64.b64decode(meta[iImg]['IceMiniHead']).decode('utf-8'), 'BIsSeriesEnd') is True:
                 currentSeries += 1
 
         imagesOut[iImg].setHead(oldHeader)
 
         # Create a copy of the original ISMRMRD Meta attributes and update
         tmpMeta = meta[iImg]
-        tmpMeta['DataRole']               = 'Image'
-        tmpMeta['ImageProcessingHistory'] = ['FIRE', 'PYTHON']
-        tmpMeta['WindowCenter']           = '16384'
-        tmpMeta['WindowWidth']            = '32768'
-        tmpMeta['Keep_image_geometry']    = 1
+        tmpMeta['DataRole']                       = 'Image'
+        tmpMeta['ImageProcessingHistory']         = ['PYTHON', 'INVERT']
+        tmpMeta['WindowCenter']                   = '16384'
+        tmpMeta['WindowWidth']                    = '32768'
+        tmpMeta['SequenceDescriptionAdditional']  = 'FIRE'
+        tmpMeta['Keep_image_geometry']            = 1
+        # tmpMeta['ROI_example']                    = create_example_roi(data.shape)
 
-        xml = tmpMeta.serialize()
-        logging.debug("Image MetaAttributes: %s", xml)
+        # Example for setting colormap
+        # tmpMeta['LUTFileName']            = 'MicroDeltaHotMetal.pal'
+
+        # Add image orientation directions to MetaAttributes if not already present
+        if tmpMeta.get('ImageRowDir') is None:
+            tmpMeta['ImageRowDir'] = ["{:.18f}".format(oldHeader.read_dir[0]), "{:.18f}".format(oldHeader.read_dir[1]), "{:.18f}".format(oldHeader.read_dir[2])]
+
+        if tmpMeta.get('ImageColumnDir') is None:
+            tmpMeta['ImageColumnDir'] = ["{:.18f}".format(oldHeader.phase_dir[0]), "{:.18f}".format(oldHeader.phase_dir[1]), "{:.18f}".format(oldHeader.phase_dir[2])]
+
+        metaXml = tmpMeta.serialize()
+        logging.debug("Image MetaAttributes: %s", xml.dom.minidom.parseString(metaXml).toprettyxml())
         logging.debug("Image data has %d elements", imagesOut[iImg].data.size)
 
-        imagesOut[iImg].attribute_string = xml
+        imagesOut[iImg].attribute_string = metaXml
 
     return imagesOut
 
-def update_img_header_from_raw(imgHead, rawHead):
-    if rawHead is None:
-        return imgHead
+# Create an example ROI <3
+def create_example_roi(img_size):
+    t = np.linspace(0, 2*np.pi)
+    x = 16*np.power(np.sin(t), 3)
+    y = -13*np.cos(t) + 5*np.cos(2*t) + 2*np.cos(3*t) + np.cos(4*t)
 
-    imgHead.version                = rawHead.version
-    imgHead.flags                  = rawHead.flags
-    imgHead.measurement_uid        = rawHead.measurement_uid
+    # Place ROI in bottom right of image, offset and scaled to 10% of the image size
+    x = (x-np.min(x)) / (np.max(x) - np.min(x))
+    y = (y-np.min(y)) / (np.max(y) - np.min(y))
+    x = (x * 0.08*img_size[0]) + 0.82*img_size[0]
+    y = (y * 0.10*img_size[1]) + 0.80*img_size[1]
 
-    # # These fields are not translated from the raw header, but filled in
-    # # during image creation by from_array
-    # imgHead.data_type            = 
-    # imgHead.matrix_size          = 
-    # imgHead.field_of_view        = 
+    rgb = (1,0,0)  # Red, green, blue color -- normalized to 1
+    thickness  = 1 # Line thickness
+    style      = 0 # Line style (0 = solid, 1 = dashed)
+    visibility = 1 # Line visibility (0 = false, 1 = true)
 
-    imgHead.image_type             = ismrmrd.IMTYPE_MAGNITUDE
-
-    imgHead.channels               = 1
-    imgHead.position               = rawHead.position
-    imgHead.read_dir               = rawHead.read_dir
-    imgHead.phase_dir              = rawHead.phase_dir
-    imgHead.slice_dir              = rawHead.slice_dir
-    imgHead.patient_table_position = rawHead.patient_table_position
-
-    imgHead.average                = rawHead.idx.average
-    imgHead.slice                  = rawHead.idx.slice
-    imgHead.contrast               = rawHead.idx.contrast
-    imgHead.phase                  = rawHead.idx.phase
-    imgHead.repetition             = rawHead.idx.repetition
-    imgHead.set                    = rawHead.idx.set
-
-    imgHead.acquisition_time_stamp = rawHead.acquisition_time_stamp
-    imgHead.physiology_time_stamp  = rawHead.physiology_time_stamp
-
-    # Defaults, to be updated by the user
-    imgHead.image_type         = ismrmrd.IMTYPE_MAGNITUDE
-    imgHead.image_index        = 0
-    imgHead.image_series_index = 0
-
-    imgHead.user_float             = rawHead.user_float
-    imgHead.user_int               = rawHead.user_int
-
-    return imgHead
-
-def extract_minihead_bool_param(miniHead, name):
-    # Extract a bool parameter from the serialized text of the ICE MiniHeader
-    # Note: if missing, return false (following ICE logic)
-    expr = r'(?<=<ParamBool."' + name + r'">{)\s*[^}]*\s*'
-    res = re.search(expr, miniHead)
-
-    if res is None:
-        return False
-    else:
-        if res.group(0).strip().lower() == '"true"'.lower():
-            return True
-        else:
-            return False
-
-def extract_minihead_long_param(miniHead, name):
-    # Extract a long parameter from the serialized text of the ICE MiniHeader
-    expr = r'(?<=<ParamLong."' + name + r'">{)\s*\d*\s*'
-    res = re.search(expr, miniHead)
-
-    if res is None:
-        return None
-    elif res.group(0).isspace():
-        return 0
-    else:
-        return int(res.group(0))
-
-def extract_minihead_string_param(miniHead, name):
-    # Extract a string parameter from the serialized text of the ICE MiniHeader
-    expr = r'(?<=<ParamString."' + name + r'">{)\s*[^}]*\s*'
-    res = re.search(expr, miniHead)
-
-    if res is None:
-        return None
-    else:
-        return res.group(0).strip()
-
-def get_meta_value(meta, key):
-    # Get a value from MRD Meta Attributes (blank if key not found)
-    if key in meta.keys():
-        return meta[key]
-    else:
-        return None
+    roi = mrdhelper.create_roi(x, y, rgb, thickness, style, visibility)
+    return roi
