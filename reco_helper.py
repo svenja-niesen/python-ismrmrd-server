@@ -226,12 +226,22 @@ def filt_ksp(kspace, traj, filt_fac=0.95):
     filt_fac: filtering is done after filt_fac * max_radius is reached, 
               where max_radius is the maximum radius of the spiral
     """
-    from numpy import hanning
+    from numpy import hamming
 
     filt = np.sqrt(traj[0]**2+traj[1]**2) # trajectory radius
     filt[filt < filt_fac*np.max(filt)] = 1
-    filt[filt >= filt_fac*np.max(filt)] = 0
-    filt_len = len(filt) - np.count_nonzero(filt)
-    filt[filt == 0] = hanning(2*filt_len)[filt_len:]
-    
-    return kspace * filt
+    filt[filt >= filt_fac*np.max(filt)] = -1
+    filt_len = len(filt[filt==-1])
+    if filt_len%2 == 1:
+        filt_len += 1
+
+    # filter outer part of kspace
+    if filt[0] == -1 and filt[-1] == -1: # both ends (e.g. double spiral)
+        filt[:filt_len//2] = hamming(filt_len)[:filt_len//2]
+        filt[-filt_len//2:] = hamming(filt_len)[filt_len//2:]
+    elif filt[0] == -1: # beginning (e.g. spiral in)
+        filt[:filt_len] = hamming(2*filt_len)[:filt_len]
+    elif filt[-1] == -1: # end (e.g. spiral out)
+        filt[-filt_len:] = hamming(2*filt_len)[filt_len:]
+
+    return kspace * filt, filt
