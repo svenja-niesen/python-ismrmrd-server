@@ -25,7 +25,7 @@ RUN /tmp/mkl.sh
 RUN  mkdir -p /opt/code
 
 RUN  cd /opt/code \
-     && git clone -b bart https://github.com/pehses/python-ismrmrd-server.git
+     && git clone -b pulseq https://github.com/pehses/python-ismrmrd-server.git
 
 # install spiraltraj for trajectory calculation
 COPY spiraltraj /opt/code/spiraltraj
@@ -191,7 +191,7 @@ RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
         ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libhdf5-dev openmpi-bin libatomic1 \
-     && pip3 install --no-cache-dir pyxb h5py intel-openmp
+     && pip3 install --no-cache-dir pyxb h5py intel-openmp scipy scikit-image
 
 RUN  mkdir -p /opt/code
 
@@ -216,7 +216,7 @@ RUN  cd /opt/code \
      && python3 setup.py install
 
 RUN  cd /opt/code \
-     && git clone -b bart https://github.com/pehses/python-ismrmrd-server.git
+     && git clone -b pulseq https://github.com/pehses/python-ismrmrd-server.git
 
 # Cleanup files not required after compiling
 RUN  apt-get remove --yes gcc git python3-pip
