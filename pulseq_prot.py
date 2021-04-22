@@ -36,6 +36,10 @@ def insert_hdr(prot_file, metadata):
     dset_udbl[1].value_ = prot_udbl[1].value_
     dset_udbl[2].name = prot_udbl[2].name # nsegments
     dset_udbl[2].value_ = prot_udbl[2].value_
+    dset_udbl[3].name = prot_udbl[3].name # t_min (initial time for B0-correction)
+    dset_udbl[3].value_ = prot_udbl[3].value_
+    dset_udbl[4].name = prot_udbl[4].name # os_region - this factor determines the part of kspace that is used for reconstruction of phase maps
+    dset_udbl[4].value_ = prot_udbl[4].value_
 
     dset_e1 = metadata.encoding[0]
     prot_e1 = prot_hdr.encoding[0]
@@ -81,6 +85,11 @@ def insert_hdr(prot_file, metadata):
     prot.close()
 
 def get_ismrmrd_arrays(prot_file):
+    """ Returns all arrays appended to the protocol file and their
+        respective keys as a tuple
+
+    """
+
     try:
         prot = ismrmrd.Dataset(prot_file+'.hdf5', create_if_needed=False)
     except:
@@ -98,7 +107,7 @@ def get_ismrmrd_arrays(prot_file):
     for key in keys:
         arr[key] = prot.read_array(key, 0)
 
-    return arr
+    return arr, keys
 
 def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
 
