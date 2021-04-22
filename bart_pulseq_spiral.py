@@ -87,7 +87,7 @@ def process_spiral(connection, config, metadata):
     except:
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
-    # Continuously parse incoming data parsed from MRD messages
+    # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
 

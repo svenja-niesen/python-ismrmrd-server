@@ -38,8 +38,11 @@ def insert_hdr(prot_file, metadata):
     dset_udbl[2].value_ = prot_udbl[2].value_
     dset_udbl[3].name = prot_udbl[3].name # t_min (initial time for B0-correction)
     dset_udbl[3].value_ = prot_udbl[3].value_
-    dset_udbl[4].name = prot_udbl[4].name # os_region - this factor determines the part of kspace that is used for reconstruction of phase maps
-    dset_udbl[4].value_ = prot_udbl[4].value_
+    try: 
+        dset_udbl[4].name = prot_udbl[4].name # os_region - this factor determines the part of kspace that is used for reconstruction of phase maps
+        dset_udbl[4].value_ = prot_udbl[4].value_
+    except:
+        pass
 
     dset_e1 = metadata.encoding[0]
     prot_e1 = prot_hdr.encoding[0]
