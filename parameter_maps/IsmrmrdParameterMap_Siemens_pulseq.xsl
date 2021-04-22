@@ -829,6 +829,11 @@
                     <value>0</value>
                 </userParameterDouble>
 
+                <userParameterDouble>
+                    <name>os_region</name>
+                    <value>0</value>
+                </userParameterDouble>
+
 		<xsl:for-each select="siemens/MEAS/sWipMemBlock/adFree">
 			<xsl:variable name="CurDouble" select="position()"/>
 			<userParameterDouble>
