@@ -103,7 +103,7 @@ ENV PATH="${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/bin:${PATH}"
 ENV MANPATH="${MANPATH}:${NVCOMPILERS}/${NVARCH}/20.11/comm_libs/mpi/man"
 
 # Install custom compile of boost - only necessary runtime components
-RUN wget -O ~/boost_1_75_0.tar.bz2 -c 'https://dl.bintray.com/boostorg/release/1.75.0/source/boost_1_75_0.tar.bz2' --max-redirect=100 \
+RUN wget -O ~/boost_1_75_0.tar.bz2 -c 'https://sourceforge.net/projects/boost/files/boost/1.75.0/boost_1_75_0.tar.bz2/download' --max-redirect=100 \
     && apt-get -y remove --purge libboost-all-dev \
     && cd ~ \
     && tar xjf ~/boost_1_75_0.tar.bz2 \
