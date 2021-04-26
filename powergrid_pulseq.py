@@ -305,7 +305,7 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
             mask = mask[slc_sel]
         phasemaps = calc_phasemaps(shotimgs, mask)
         np.save(debugFolder + "/" + "phsmaps.npy", phasemaps)
-        dset_tmp.append_array("PhaseMap", phasemaps)
+        dset_tmp.append_array("PhaseMaps", phasemaps)
 
     # Average acquisition data before reco
     # Assume that averages are acquired in the same order for every slice, contrast, ...
