@@ -415,8 +415,8 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
                                 image.image_series_index = series_ix # contains repetitions, contrasts
                                 image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
                                 if len(prot_arrays) > 0:
-                                    image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
-                                    image.user_float[:3] = prot_arrays['Directions'][phs]
+                                    image.user_int[0] = int(prot_arrays[0]['b_values'][contr+data_ix])
+                                    image.user_float[:3] = prot_arrays[0]['Directions'][phs]
                                 image.attribute_string = xml
                                 images.append(image)
         else:
@@ -528,9 +528,9 @@ def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
     def geom_mean(arr, axis):
         return (np.prod(arr, axis=axis))**(1.0/3.0)
 
-    b_val = prot_arrays['b_values']
+    b_val = prot_arrays[0]['b_values']
     n_bval = b_val.shape[0] - 1
-    directions = prot_arrays['Directions']
+    directions = prot_arrays[0]['Directions']
     n_directions = directions.shape[0]
 
     # reshape images - we dont use repetions and Nz (no 3D imaging for diffusion)
