@@ -288,7 +288,9 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
 
     # Calculate phase maps from shot images and append if necessary
     # WIPs: Compare bet_mask and mask
+    pcSENSE = False
     if shotimgs is not None:
+        pcSENSE = True
         if slc_sel is not None:
             shotimgs = np.expand_dims(np.stack(shotimgs[slc_sel]),0)
         else:
@@ -346,7 +348,7 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
     # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
     # However, histo lead to quite nice results so far & does not need as many time segments
     data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=0, 
-                                ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT')
+                                ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT', pcSENSE=pcSENSE)
     shapes = data["shapes"] 
     data = np.asarray(data["img_data"]).reshape(shapes)
     data = np.abs(data)
