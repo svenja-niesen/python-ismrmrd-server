@@ -136,7 +136,7 @@ RUN cd opt/code \
 RUN  cd /opt/code \
      && git clone https://github.com/mavel101/PowerGrid \
      && cd PowerGrid \
-     && git checkout icefire \
+     && git checkout python_pybind \
      && git submodule update --init --recursive \
      && cp PowerGrid/Python/setup_CPU.py setup.py \
      && pip3 wheel .

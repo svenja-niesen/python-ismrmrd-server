@@ -143,7 +143,7 @@ RUN cd opt/code \
 RUN  cd /opt/code \
      && git clone https://github.com/mavel101/PowerGrid \
      && cd PowerGrid \
-     && git checkout icefire \
+     && git checkout python_pybind \ \
      && git submodule update --init --recursive \
      && cp PowerGrid/Python/setup_GPU.py setup.py \
      && pip3 wheel .
@@ -162,7 +162,6 @@ COPY --from=mrd_converter /usr/local/. /usr/local/
 COPY --from=mrd_converter /opt/nvidia /opt/nvidia 
 COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
 COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
