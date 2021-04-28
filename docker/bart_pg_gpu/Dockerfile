@@ -228,6 +228,9 @@ RUN  cd /opt/code \
      && cd /opt/code/ismrmrd-python-tools \
      && python3 setup.py install
 
+RUN  cd /opt/code \
+     && git clone -b pulseq https://github.com/pehses/python-ismrmrd-server.git
+
 # Cleanup files not required after compiling
 RUN  apt-get remove --yes gcc git python3-pip
 RUN  apt-get autoremove --yes 
