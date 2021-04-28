@@ -139,14 +139,21 @@ RUN cd opt/code \
     && make install \
     && ldconfig
 
-# Install PowerGrid
+# Install PowerGrid - cnpy version writing numpy arrays
 RUN  cd /opt/code \
      && git clone https://github.com/mavel101/PowerGrid \
      && cd PowerGrid \
-     && git checkout python_pybind \
+     && git checkout python_cnpy \
      && git submodule update --init --recursive \
-     && cp PowerGrid/Python/setup_GPU.py setup.py \
-     && pip3 wheel .
+     && mkdir build && cd build \
+     && cmake ../ -DCMAKE_CXX_COMPILER=pgc++ -DCMAKE_INSTALL_PREFIX=/usr/local/PowerGrid \
+     && make -j4 && make install
+     # && cd /opt/code/PowerGrid \
+     # && git checkout python_pybind \
+     # && git submodule update --init --recursive \
+     # && cp PowerGrid/Python/setup_GPU.py setup.py \
+     # && pip3 wheel . \
+     
 
 # ----- Start another clean build without all of the build dependencies of siemens_to_ismrmrd -----
 FROM nvidia/cuda:11.1-devel-ubuntu20.04
@@ -160,8 +167,15 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # Copy packages from last stage and re-add necessary dependencies
 COPY --from=mrd_converter /usr/local/. /usr/local/
 COPY --from=mrd_converter /opt/nvidia /opt/nvidia 
+COPY --from=mrd_converter /opt/code/PowerGrid /opt/code/PowerGrid
 COPY --from=mrd_converter /opt/code/spiraltraj/SpiralTraj* /opt/code/
-COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
+# COPY --from=mrd_converter /opt/code/PowerGrid/PowerGridPy* /opt/code/
+
+# Set variables for PowerGrid
+ENV LD_LIBRARY_PATH="/usr/local/PowerGrid/lib:${LD_LIBRARY_PATH}"
+ENV PATH="/usr/local/PowerGrid/bin:${PATH}"
+# Disable file locking for PowerGrid MPI-versions
+ENV HDF5_USE_FILE_LOCKING=FALSE
 
 # Copy MKL
 COPY --from=mrd_converter /opt/intel/mkl/lib /opt/intel/mkl/lib/
@@ -189,15 +203,15 @@ COPY --from=mrd_converter /opt/code/bart/python/* /opt/code/pythonpath/
 RUN  apt-get update --quiet \
      && apt-get dist-upgrade --yes \
      && apt-get install --no-install-recommends --no-install-suggests --yes \
-        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libhdf5-dev openmpi-bin libatomic1 \
-     && pip3 install --no-cache-dir pyxb h5py intel-openmp scipy scikit-image
+        ca-certificates nano git gcc python3 python3-pip h5utils libxslt1.1 libfftw3-3 liblapacke libhdf5-dev openmpi-bin libatomic1 environment-modules \
+     && pip3 install --no-cache-dir pyxb h5py intel-openmp scipy scikit-image psutil
 
 RUN  mkdir -p /opt/code
 
-# PowerGrid
-RUN  cd /opt/code \
-     && pip3 install PowerGridPy* \
-     && rm PowerGrid*
+# Old PowerGrid pybind bindings
+# RUN  cd /opt/code \
+#      && pip3 install PowerGridPy* \
+#      && rm PowerGrid*
 
 RUN  cd /opt/code \
      && pip3 install SpiralTraj* \
@@ -213,9 +227,6 @@ RUN  cd /opt/code \
      && git clone https://github.com/ismrmrd/ismrmrd-python-tools.git \
      && cd /opt/code/ismrmrd-python-tools \
      && python3 setup.py install
-
-RUN  cd /opt/code \
-     && git clone -b pulseq https://github.com/pehses/python-ismrmrd-server.git
 
 # Cleanup files not required after compiling
 RUN  apt-get remove --yes gcc git python3-pip

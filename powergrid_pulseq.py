@@ -7,7 +7,8 @@ import numpy as np
 import base64
 
 from bart import bart
-from PowerGridPy import PowerGridIsmrmrd
+# from PowerGridPy import PowerGridIsmrmrd
+import subprocess
 from cfft import cfftn, cifftn
 
 from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
@@ -39,7 +40,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = None
+    slc_sel = 15
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
     skope = False
@@ -338,23 +339,48 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
 
     # Process with PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
-    debug_pg = debugFolder+"/powergrid_tmp"
-    if not os.path.exists(debug_pg):
-        os.makedirs(debug_pg)
+    pg_dir = dependencyFolder+"/powergrid_results"
+    if not os.path.exists(pg_dir):
+        os.makedirs(pg_dir)
 
     n_shots = metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1
 
+    """ PowerGrid reconstruction
     # Comment from Alex Cerjanic, who built PowerGrid: 'histo' option can generate a bad set of interpolators in edge cases
     # He recommends using the Hanning interpolator with ~1 time segment per ms of readout (which is based on experience @3T)
     # However, histo lead to quite nice results so far & does not need as many time segments
-    data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=0, 
-                                ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT', pcSENSE=pcSENSE)
-    shapes = data["shapes"] 
-    data = np.asarray(data["img_data"]).reshape(shapes)
+    """
+ 
+    # Source modules to use module load - module load sets correct LD_LIBRARY_PATH for MPI
+    # the LD_LIBRARY_PATH is causing problems with BART though, so it has to be done here
+    pre_cmd = 'source /etc/profile.d/modules.sh && module load /opt/nvidia/hpc_sdk/modulefiles/nvhpc/20.11 && '
+    import psutil
+    cores = psutil.cpu_count(logical = False) # number of physical cores
+    # Run PowerGrid in bash
+    pg_opts = f'-i {tmp_file} -o {pg_dir} -s {n_shots} -I hanning -t 20 -B 1000 -n 15 -D 2' # -w option writes intermediate results as niftis in pg_dir folder
+    if pcSENSE:
+        pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridPcSenseMPI_TS ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
+    else:
+        pg_opts += ' -F NUFFT'
+        pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' +pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
+    print(pg_process.stdout)
+
+    # Image data is saved as .npy
+    data = np.load(pg_dir + "/images_pg.npy")
     data = np.abs(data)
 
-    # data should have output [Slice, Phase, Contrast, Avg, Rep, Nz, Ny, Nx]
-    # change to [Avg, Rep, Contrast, Phase, Slice, Nz, Ny, Nx] and average
+    ### old implementation with pybind
+    # data = PowerGridIsmrmrd(inFile=tmp_file, outFile=debug_pg+"/img", timesegs=20, niter=10, nShots=n_shots, beta=0, 
+                                # ts_adapt=False, TSInterp='hanning', FourierTrans='NUFFT', pcSENSE=pcSENSE)
+    # shapes = data["shapes"] 
+    # data = np.asarray(data["img_data"]).reshape(shapes)
+    # data = np.abs(data)
+
+    """
+    """
+
+    # data should have output [Slice, Phase, Contrast/Echo, Avg, Rep, Nz, Ny, Nx]
+    # change to [Avg, Rep, Contrast/Echo, Phase, Slice, Nz, Ny, Nx] and average
     data = np.transpose(data, [3,4,2,1,0,5,6,7]).mean(axis=0)
 
     logging.debug("Image data is size %s" % (data.shape,))
