@@ -298,10 +298,8 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
             shotimgs = np.stack(shotimgs)
         shotimgs = np.swapaxes(shotimgs, 0, 1) # swap slice & contrast as slice phase maps should be ordered [contrast, slice, shots, ny, nx]
         shotimgs = np.swapaxes(shotimgs, -1, -2) # swap nx & ny
-        try:
-            mask = fmap['bet_mask']
-        except:
-            mask = fmap['mask'] # fallback for older versions
+        # mask = fmap['bet_mask']
+        mask = fmap['mask'] # WIP: use whole mask or only bet mask?
         if slc_sel:
             mask = mask[slc_sel]
         phasemaps = calc_phasemaps(shotimgs, mask)
