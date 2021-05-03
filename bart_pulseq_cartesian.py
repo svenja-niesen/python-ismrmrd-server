@@ -98,7 +98,8 @@ def process_cartesian(connection, config, metadata):
                     # calculate pre-whitening matrix
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
-                
+                    noiseGroup.clear()
+
                 # Accumulate all imaging readouts in a group
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
                     continue
@@ -110,6 +111,7 @@ def process_cartesian(connection, config, metadata):
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx)
+                    acsGroup[item.idx.slice].clear()
 
                 acqGroup[item.idx.contrast][item.idx.slice].append(item)
 
@@ -120,6 +122,7 @@ def process_cartesian(connection, config, metadata):
                     image = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                     logging.debug("Sending image to client:\n%s", image)
                     connection.send_image(image)
+                    acqGroup[item.idx.contrast][item.idx.slice].clear() # free memory
 
             # ----------------------------------------------------------
             # Image data messages

@@ -40,7 +40,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = None
+    slc_sel = 15
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
     skope = False
@@ -143,6 +143,7 @@ def process(connection, config, metadata):
                     # calculate pre-whitening matrix
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
+                    noiseGroup.clear()
                 
                 # Check for additional flags
                 if item.is_flag_set(ismrmrd.ACQ_IS_PHASECORR_DATA):
@@ -158,6 +159,7 @@ def process(connection, config, metadata):
                     elif sensmaps[item.idx.slice] is None:
                         # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                         sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) # [nx,ny,nz,nc]
+                        acsGroup[item.idx.slice].clear()
 
                     # Process imaging scans - deal with ADC segments
                     if item.idx.segment == 0:
@@ -334,13 +336,15 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
                         acq.idx.slice = 0
                 dset_tmp.append_acquisition(acq)
     dset_tmp.close()
+    acqGroup.clear() # free memory
 
-    # Process with PowerGrid
+    # Define in- and output for PowerGrid
     tmp_file = dependencyFolder+"/PowerGrid_tmpfile.h5"
     pg_dir = dependencyFolder+"/powergrid_results"
     if not os.path.exists(pg_dir):
         os.makedirs(pg_dir)
-
+    if os.path.exists(pg_dir+"/images_pg.npy"):
+        os.remove(pg_dir+"/images_pg.npy")
     n_shots = metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1
 
     """ PowerGrid reconstruction
@@ -360,16 +364,16 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
     pg_opts = f'-i {tmp_file} -o {pg_dir} -s {n_shots} -I hanning -t 20 -B 1000 -n 15 -D 2' # -w option writes intermediate results as niftis in pg_dir folder
     if pcSENSE:
         if mpi:
-            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridPcSenseMPI_TS ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
+            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridPcSenseMPI_TS ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
         else:
-            pg_process = subprocess.run('PowerGridPcSenseTimeSeg ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
+            pg_process = subprocess.run('PowerGridPcSenseTimeSeg ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
     else:
         pg_opts += ' -F NUFFT'
         if mpi:
-            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' +pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
+            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' +pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
         else:
-            pg_process = subprocess.run('PowerGridIsmrmrd ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash')
-    print(pg_process.stdout)
+            pg_process = subprocess.run('PowerGridIsmrmrd ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
+    logging.debug(pg_process.stdout)
 
     # Image data is saved as .npy
     data = np.load(pg_dir + "/images_pg.npy")

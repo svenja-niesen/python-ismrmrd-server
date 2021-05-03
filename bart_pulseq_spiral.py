@@ -125,7 +125,8 @@ def process_spiral(connection, config, metadata):
                     # calculate pre-whitening matrix
                     dmtx = calculate_prewhitening(noise_data)
                     del(noise_data)
-                
+                    noiseGroup.clear()
+                    
                 # skip slices in single slice reconstruction
                 if slc_sel is not None and item.idx.slice != slc_sel:
                     continue
@@ -141,6 +142,7 @@ def process_spiral(connection, config, metadata):
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
+                    acsGroup[item.idx.slice].clear()
 
                 if item.idx.segment == 0:
                     acqGroup[item.idx.contrast][item.idx.slice].append(item)
@@ -157,6 +159,7 @@ def process_spiral(connection, config, metadata):
                     images = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
+                    acqGroup[item.idx.contrast][item.idx.slice].clear() # free memory
 
             # ----------------------------------------------------------
             # Image data messages
