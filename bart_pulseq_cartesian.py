@@ -315,14 +315,14 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None):
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par].T, acquisition=group[0])
-            image.image_index = 1 + group[0].idx.contrast * n_contr + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_slc + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
     else:
         image = ismrmrd.Image.from_array(data[...,0].T, acquisition=group[0])
-        image.image_index = 1 + group[0].idx.contrast * n_contr + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
         image.attribute_string = xml

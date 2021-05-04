@@ -240,7 +240,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
         ecalib_config = 'ecalib -m 1 -I'
         pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
 
-    force_pics = False
+    force_pics = True
     if sensmaps is None and force_pics:
         sensmaps = bart(1, nufft_config, trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
@@ -298,14 +298,14 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-            image.image_index = 1 + group[0].idx.contrast * n_contr + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_slc + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
     else:
         image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
-        image.image_index = 1 + group[0].idx.contrast * n_contr + group[0].idx.slice # contains image index (slices/partitions)
+        image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
         image.attribute_string = xml
