@@ -121,8 +121,10 @@
         <p><s>MEAS.sDiffusion.lDiffDirections</s>                               <d>siemens.MEAS.sDiffusion.lDiffDirections</d></p>
         <p><s>MEAS.sDiffusion.alBValue</s>                                      <d>siemens.MEAS.sDiffusion.alBValue</d></p>
 
-        <!-- user defined parameter -->
+        <!-- user defined parameter: links Siemens path, rechts xml path-->
         <p><s>MEAS.sProtConsistencyInfo.tBaselineString</s>                     <d>siemens.MEAS.sProtConsistencyInfo.tBaselineString</d></p>
+        <p><s>MEAS.sTXSPEC.asNucleusInfo.0.flReferenceAmplitude</s>             <d>siemens.MEAS.sTXSPEC.asNucleusInfo.flReferenceAmplitude</d></p>
+        <p><s>MEAS.sGRADSPEC.alShimCurrent</s>                                  <d>siemens.MEAS.sGRADSPEC.alShimCurrent</s></d></p>
 
         <!-- Coil information -->
         <p><s>MEAS.sCoilSelectMeas.aRxCoilSelectData.0.asList.0.sCoilElementID.tCoilID</s>                                       <d>siemens.MEAS.asCoilSelectMeas.ID.tCoilID</d></p>

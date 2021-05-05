@@ -834,6 +834,25 @@
                     <value>0</value>
                 </userParameterDouble>
 
+                <xsl:if test="siemens/MEAS/sTXSPEC/asNucleusInfo/flReferenceAmplitude">
+                <userParameterDouble>
+                    <name>RefVoltage</name>
+                    <value>
+                        <xsl:value-of select="siemens/MEAS/sTXSPEC/asNucleusInfo/flReferenceAmplitude"/>
+                    </value>
+                </userParameterDouble>
+                </xsl:if>
+
+                <xsl:for-each select="siemens/MEAS/sGRADSPEC/alShimCurrent">
+			        <xsl:variable name="CurDouble" select="position()"/>
+			        <userParameterDouble>
+				        <name>ShimCurrent[<xsl:value-of select="$CurDouble - 1" />]</name>
+				        <value>
+				          <xsl:value-of select="."/>
+				        </value>
+			        </userParameterDouble>
+	    	    </xsl:for-each>
+
 		<xsl:for-each select="siemens/MEAS/sWipMemBlock/adFree">
 			<xsl:variable name="CurDouble" select="position()"/>
 			<userParameterDouble>
