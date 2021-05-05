@@ -97,6 +97,14 @@ def process(connection, config, metadata):
     except:
         logging.info("Improperly formatted metadata: \n%s", metadata)
 
+    # Log some measurement parameters
+    freq = metadata.experimentalConditions.H1resonanceFrequency_Hz
+    shim_currents = [k.value_ for k in metadata.userParameters.userParameterDouble[6:15]]
+    ref_volt = metadata.userParameters.userParameterDouble[5].value_
+    logging.info(f"Measurement Frequency: {freq}")
+    logging.info(f"Shim Currents: {shim_currents}")
+    logging.info(f"Reference Voltage: {ref_volt}")
+
     # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
@@ -373,7 +381,7 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
             pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' +pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
         else:
             pg_process = subprocess.run('PowerGridIsmrmrd ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
-    logging.debug(pg_process.stdout)
+    logging.debug(pg_process.stderr)
 
     # Image data is saved as .npy
     data = np.load(pg_dir + "/images_pg.npy")
@@ -562,7 +570,7 @@ def calc_phasemaps(shotimgs, mask):
 def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
 
     def geom_mean(arr, axis):
-        return (np.prod(arr, axis=axis))**(1.0/3.0)
+        return (np.prod(arr, axis=axis))**(1.0/arr.shape[axis])
 
     b_val = prot_arrays[0]['b_values']
     n_bval = b_val.shape[0] - 1
