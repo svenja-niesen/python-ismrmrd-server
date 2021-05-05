@@ -536,9 +536,9 @@ def process_shots(group, metadata, sensmaps, prot_arrays, slc_sel=None):
 
     # Reconstruct low resolution images
     if os.environ.get('NVIDIA_VISIBLE_DEVICES') == 'all':
-       pics_config = 'pics -g -S -e -l1 -r 0.001 -i 50 -t'
+       pics_config = 'pics -g -S -e -i 30 -t'
     else:
-       pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
+       pics_config = 'pics -S -e -i 30 -t'
 
     imgs = []
     for k in range(data.shape[2]):
