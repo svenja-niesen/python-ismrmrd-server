@@ -110,7 +110,7 @@ def get_ismrmrd_arrays(prot_file):
     for key in keys:
         arr[key] = prot.read_array(key, 0)
 
-    return arr, keys
+    return arr
 
 def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
 

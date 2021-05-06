@@ -40,7 +40,7 @@ dependencyFolder = os.path.join(shareFolder, "dependency")
 def process(connection, config, metadata):
     
     # Select a slice (only for debugging purposes) - if "None" reconstruct all slices
-    slc_sel = None
+    slc_sel = 15
 
     # Set this True, if a Skope trajectory is used (protocol file with skope trajectory has to be available)
     skope = False
@@ -68,7 +68,6 @@ def process(connection, config, metadata):
 
     # Get additional arrays from protocol file - e.g. for diffusion imaging
     prot_arrays = get_ismrmrd_arrays(prot_file)
-    protarr_keys = prot_arrays[1]
 
     # define variables for FOV shift
     nsegments = metadata.userParameters.userParameterDouble[2].value_
@@ -119,7 +118,7 @@ def process(connection, config, metadata):
     dmtx = None
     base_trj_ = []
 
-    if "b_values" in protarr_keys and n_intl > 1:
+    if "b_values" in prot_arrays and n_intl > 1:
         # we use the contrast index here to get the PhaseMaps into the correct order
         # PowerGrid reconstructs with ascending contrast index, so the phase maps should be ordered like that
         shotimgs = [[[] for _ in range(n_contr)] for _ in range(n_slc)]
@@ -201,7 +200,7 @@ def process(connection, config, metadata):
                             sensmaps[item.idx.slice] = sens_from_raw(acqGroup[item.idx.slice][item.idx.contrast], metadata)
                         # Reconstruct shot images for phase maps in multishot diffusion imaging
                         if shotimgs is not None:
-                            shotimgs[item.idx.slice][item.idx.contrast] = process_shots(acqGroup[item.idx.slice][item.idx.contrast], metadata, sensmaps[item.idx.slice], slc_sel)
+                            shotimgs[item.idx.slice][item.idx.contrast] = process_shots(acqGroup[item.idx.slice][item.idx.contrast], metadata, sensmaps[item.idx.slice])
 
                 # When all acquisitions are processed, write them to file for PowerGrid Reco,
                 # which returns images that are sent back to the client.
@@ -309,7 +308,7 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
         shotimgs = np.swapaxes(shotimgs, 0, 1) # swap slice & contrast as slice phase maps should be ordered [contrast, slice, shots, ny, nx]
         shotimgs = np.swapaxes(shotimgs, -1, -2) # swap nx & ny
         # mask = fmap['bet_mask']
-        mask = fmap['mask'] # WIP: use whole mask or only bet mask?
+        mask = fmap['mask'] # seems to make no difference which mask is used
         if slc_sel:
             mask = mask[slc_sel]
         phasemaps = calc_phasemaps(shotimgs, mask)
@@ -421,8 +420,7 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
         dsets.append(data)
 
     # Diffusion evaluation
-    protarr_keys = prot_arrays[1]
-    if "b_values" in protarr_keys:
+    if "b_values" in prot_arrays:
         mask = fmap['mask']
         if slc_sel is not None:
             mask = mask[slc_sel]
@@ -458,9 +456,10 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
                                 image.image_index = img_ix # contains slices/partitions and phases
                                 image.image_series_index = series_ix # contains repetitions, contrasts
                                 image.slice = 0 # WIP: test counting slices, contrasts, ... at scanner
-                                if len(prot_arrays) > 0:
-                                    image.user_int[0] = int(prot_arrays[0]['b_values'][contr+data_ix])
-                                    image.user_float[:3] = prot_arrays[0]['Directions'][phs]
+                                if 'b_values' in prot_arrays:
+                                    image.user_int[0] = int(prot_arrays['b_values'][contr+data_ix])
+                                if 'Directions' in prot_arrays:
+                                    image.user_float[:3] = prot_arrays['Directions'][phs]
                                 image.attribute_string = xml
                                 images.append(image)
         else:
@@ -519,7 +518,7 @@ def sens_from_raw(group, metadata):
     sensmaps = bart(1, 'ecalib -m 1 -I', sensmaps)  # ESPIRiT calibration
     return sensmaps
 
-def process_shots(group, metadata, sensmaps, prot_arrays, slc_sel=None):
+def process_shots(group, metadata, sensmaps):
 
     from skimage.transform import resize
 
@@ -572,9 +571,9 @@ def process_diffusion_images(b0, diffw_imgs, prot_arrays, mask):
     def geom_mean(arr, axis):
         return (np.prod(arr, axis=axis))**(1.0/arr.shape[axis])
 
-    b_val = prot_arrays[0]['b_values']
+    b_val = prot_arrays['b_values']
     n_bval = b_val.shape[0] - 1
-    directions = prot_arrays[0]['Directions']
+    directions = prot_arrays['Directions']
     n_directions = directions.shape[0]
 
     # reshape images - we dont use repetions and Nz (no 3D imaging for diffusion)
