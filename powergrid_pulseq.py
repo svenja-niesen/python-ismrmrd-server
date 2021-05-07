@@ -134,7 +134,7 @@ def process(connection, config, metadata):
             if isinstance(item, ismrmrd.Acquisition):
 
                 # insert acquisition protocol
-                base_trj = insert_acq(prot_file, item, acq_ctr, skope=skope)
+                base_trj = insert_acq(prot_file, item, acq_ctr)
                 if base_trj is not None: # base_trj is calculated e.g. for future trajectory comparisons
                     base_trj_.append(base_trj)
 

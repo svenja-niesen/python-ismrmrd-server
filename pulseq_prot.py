@@ -9,6 +9,11 @@ import os
 from reco_helper import calc_rotmat, gcs_to_dcs, dcs_to_gcs, intp_axis
 
 def insert_hdr(prot_file, metadata): 
+    """
+        Inserts the header from an ISMRMRD protocol file
+        prot_file:    ISMRMRD protocol file
+        metadata:     Dataset header
+    """
 
     #---------------------------
     # Read protocol
@@ -112,8 +117,18 @@ def get_ismrmrd_arrays(prot_file):
 
     return arr
 
-def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
-
+def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True):
+    """
+        Inserts acquisitions from an ISMRMRD protocol file
+        
+        prot_file:    ISMRMRD protocol file
+        dset_acq:     Dataset acquisition
+        acq_ctr:      ISMRMRD acquisition number
+        noncartesian: For noncartesian acquisitions a trajectory or readout gradients has to be provided
+                      If readout gradients are provided, the GIRF is applied, but additional parameters have to be provided.
+                      The unit for gradients is [T/m]
+                      The unit for trajectories is [rad/m * FOV[m]/2pi], which is unitless (used by the BART toolbox & PowerGrid)
+    """
     #---------------------------
     # Read protocol
     #---------------------------
@@ -194,10 +209,13 @@ def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True, skope=False):
         # save data as it gets corrupted by the resizing, dims are [nc, samples]
         data_tmp = dset_acq.data[:] 
 
-        # calculate trajectory with GIRF or take skope trajectory
-        reco_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
-        if skope:
-            reco_trj = prot_acq.traj[:,:3] # skope trajectory (aligned to ADC) should be in the protocol file
+        # calculate trajectory with GIRF or take trajectory from protocol
+        # check if number of samples equals number of trajectory points and check maximum of trajectory value (should be a pretty robust check)
+        if prot_acq.traj.shape[0] == dset_acq.data.shape[1] and prot_acq.traj[:,:3].max() > 1:
+            reco_trj = prot_acq.traj[:,:3] # trajectory (aligned to ADC) from the protocol file
+            base_trj = reco_trj.copy()
+        else:
+            reco_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
 
         dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
