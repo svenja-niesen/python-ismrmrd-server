@@ -367,20 +367,26 @@ def process_raw(acqGroup, metadata, sensmaps, shotimgs, prot_arrays, slc_sel=Non
     import psutil
     cores = psutil.cpu_count(logical = False) # number of physical cores
 
-    # Run PowerGrid in bash
+    # Define PowerGrid options
     pg_opts = f'-i {tmp_file} -o {pg_dir} -s {n_shots} -I hanning -t 20 -B 1000 -n 15 -D 2' # -w option writes intermediate results as niftis in pg_dir folder
+    logging.debug("PowerGrid Reconstruction options: %s",  pg_opts)
     if pcSENSE:
         if mpi:
-            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridPcSenseMPI_TS ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
+            subproc = pre_cmd + f'mpirun -n {cores} PowerGridPcSenseMPI_TS ' + pg_opts
         else:
-            pg_process = subprocess.run('PowerGridPcSenseTimeSeg ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
+            subproc = 'PowerGridPcSenseTimeSeg ' + pg_opts
     else:
         pg_opts += ' -F NUFFT'
         if mpi:
-            pg_process = subprocess.run(pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' +pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
+            subproc = pre_cmd + f'mpirun -n {cores} PowerGridSenseMPI ' + pg_opts
         else:
-            pg_process = subprocess.run('PowerGridIsmrmrd ' + pg_opts, shell=True, check=True, text=True, executable='/bin/bash', capture_output=True)
-    logging.debug(pg_process.stderr)
+            subproc = 'PowerGridIsmrmrd ' + pg_opts
+    # Run in bash
+    try:
+        subprocess.run(subproc, shell=True, check=True, text=True, executable='/bin/bash', stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        logging.debug(e.stdout)
+        raise RuntimeError("PowerGrid Reconstruction failed. See logfiles for errors.")
 
     # Image data is saved as .npy
     data = np.load(pg_dir + "/images_pg.npy")

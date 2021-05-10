@@ -207,7 +207,8 @@ def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True):
             t_vec = None
 
         # save data as it gets corrupted by the resizing, dims are [nc, samples]
-        data_tmp = dset_acq.data[:] 
+        data_tmp = dset_acq.data[:]
+        dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
 
         # calculate trajectory with GIRF or take trajectory from protocol
         # check if number of samples equals number of trajectory points and check maximum of trajectory value (should be a pretty robust check)
@@ -217,7 +218,6 @@ def insert_acq(prot_file, dset_acq, acq_ctr, noncartesian=True):
         else:
             reco_trj, base_trj = calc_traj(prot_acq, prot_hdr, nsamples_full) # [samples, dims]
 
-        dset_acq.resize(trajectory_dimensions=4, number_of_samples=nsamples_full, active_channels=dset_acq.active_channels)
         dset_acq.data[:] = np.concatenate((data_tmp, np.zeros([dset_acq.active_channels, nsamples_full - nsamples])), axis=-1) # fill extended part of data with zeros
         dset_acq.traj[:,:3] = reco_trj.copy()
         if t_vec is not None:
