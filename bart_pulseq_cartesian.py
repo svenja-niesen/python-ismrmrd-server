@@ -332,6 +332,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             else:
                 fa_map = calc_fa(ste, fid)
             
+            np.save(debugFolder + "/" + "fa.npy", fa_map)
             fa_map = np.around(fa_map)
             fa_map = fa_map.astype(np.int16)
             logging.debug("fa map is size %s" % (fa_map.shape,))
