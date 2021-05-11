@@ -248,7 +248,9 @@ def calc_traj(acq, hdr, ncol):
     fov = hdr.encoding[0].reconSpace.fieldOfView_mm.x
     rotmat = calc_rotmat(acq)
     dwelltime = 1e-6 * hdr.userParameters.userParameterDouble[0].value_
-    gradshift = hdr.userParameters.userParameterDouble[1].value_ # delay before trajectory begins
+    
+    # delay before trajectory begins - WIP: allow to provide an array of delays - this would be useful e.g. for EPI
+    gradshift = hdr.userParameters.userParameterDouble[1].value_
 
     # ADC sampling time
     adctime = dwelltime * np.arange(0.5, ncol)
@@ -299,7 +301,7 @@ def calc_traj(acq, hdr, ncol):
     pred_trj *= dt_grad * gammabar * (1e-3 * fov)
     base_trj *= dt_grad * gammabar * (1e-3 * fov)
 
-    # interpolate trajectory to scanner dwelltime
+    # align trajectory to scanner ADC
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=1)
     pred_trj = intp_axis(adctime, gradtime, pred_trj, axis=1)
 

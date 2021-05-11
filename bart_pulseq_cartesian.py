@@ -339,6 +339,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
         else:
             fa_map = None
     else:
+        fa_map = None
         logging.info("no dream B1 mapping")
 
     # Normalize and convert to int16
