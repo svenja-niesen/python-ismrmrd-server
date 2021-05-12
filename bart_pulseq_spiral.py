@@ -149,7 +149,13 @@ def process_spiral(connection, config, metadata):
                 elif sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
-                    acsGroup[item.idx.slice].clear()
+                    if acsGroup.count([]) != 0 and sensmaps[item.idx.slice] is not None:
+                        if n_slc % 2 == 0:
+                            sensmaps[item.idx.slice - 1] = sensmaps[item.idx.slice]
+                        elif (n_slc % 2 != 0) and (item.idx.slice != n_slc - 1):
+                            sensmaps[item.idx.slice + 1] = sensmaps[item.idx.slice]
+                    else:
+                        acsGroup[item.idx.slice].clear()
 
                 if item.idx.segment == 0:
                     acqGroup[item.idx.contrast][item.idx.slice].append(item)
@@ -205,6 +211,7 @@ def process_spiral(connection, config, metadata):
                 logging.info("Processing a group of k-space data (untriggered)")
                 if sensmaps[item.idx.slice] is None:
                     # run parallel imaging calibration
+                    #acsGroup[item.idx.slice].clear() ???
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx) 
                 image = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice])
                 logging.debug("Sending image to client:\n%s", image)
@@ -235,7 +242,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     #logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
-    data_fid = data # for b1 filter
+    if 'dream' in prot_arrays :
+        if prot_arrays['dream'].size > 1 :
+            logging.info("fid_filt avtivated")
+            data_fid = data # for b1 filter
     
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
@@ -303,7 +313,6 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 # T1 estimate:
                 t1 = dream[5]        # [s] - approximately Gufi Phantom at 7T
                 # TI estimate (the time after DREAM preparation after which each k-space line is acquired):
-                logging.debug("Nintlvs = %s" % (metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1))
                 ti = np.zeros([metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1, metadata.encoding[0].encodedSpace.matrixSize.z])
                 for i,acq in enumerate(group):
                     ti[acq.idx.kspace_encode_step_1, acq.idx.kspace_encode_step_2] = i
