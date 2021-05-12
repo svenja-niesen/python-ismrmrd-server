@@ -8,9 +8,9 @@ import base64
 
 from bart import bart
 from cfft import cfftn, cifftn
-from pulseq_prot import insert_hdr, insert_acq
+from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
 from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os
-
+from DreamMap import DREAM_filter_fid, calc_fa
 
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
     Reconstruction is done with the BART toolbox
@@ -89,7 +89,7 @@ def process_spiral(connection, config, metadata):
 
     # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
-    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
 
     acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
@@ -99,6 +99,13 @@ def process_spiral(connection, config, metadata):
     sensmaps = [None] * n_slc
     dmtx = None
     base_trj_ = []
+    
+    # read protocol arrays
+    prot_arrays = get_ismrmrd_arrays(prot_file)
+
+    # for B1 Dream map
+    if "dream" in prot_arrays:
+        process_raw.imagesets = [None] * n_contr
 
     try:
         for acq_ctr, item in enumerate(connection):
@@ -156,7 +163,7 @@ def process_spiral(connection, config, metadata):
                 # data, which returns images that are sent back to the client.
                 if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE) or item.is_flag_set(ismrmrd.ACQ_LAST_IN_REPETITION):
                     logging.info("Processing a group of k-space data")
-                    images = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu)
+                    images = process_raw(acqGroup[item.idx.contrast][item.idx.slice], config, metadata, dmtx, sensmaps[item.idx.slice], gpu, prot_arrays)
                     logging.debug("Sending images to client:\n%s", images)
                     connection.send_image(images)
                     acqGroup[item.idx.contrast][item.idx.slice].clear() # free memory
@@ -212,7 +219,7 @@ def process_spiral(connection, config, metadata):
 # Process Data
 #########################
 
-def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
+def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, prot_arrays=None):
 
     nx = metadata.encoding[0].encodedSpace.matrixSize.x
     ny = metadata.encoding[0].encodedSpace.matrixSize.y
@@ -228,6 +235,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
     #logging.debug("nx,ny,nz %s, %s, %s" % (nx, ny, nz))
     np.save(debugFolder + "/" + "raw.npy", data)
     
+    data_fid = data # for b1 filter
+    
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
 
@@ -237,10 +246,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
         pics_config = 'pics -g -S -e -l1 -r 0.001 -i 50 -t'
     else:
         nufft_config = 'nufft -i -l 0.005 -t -d %d:%d:%d'%(nx, nx, nz)
-        ecalib_config = 'ecalib -m 1 -I'
+        ecalib_config = 'ecalib -m 1 -I -r 30 -k 8'
         pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
 
-    force_pics = False
+    force_pics = True
     if sensmaps is None and force_pics:
         sensmaps = bart(1, nufft_config, trj, data) # nufft
         sensmaps = cfftn(sensmaps, [0, 1, 2]) # back to k-space
@@ -271,16 +280,90 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False):
     logging.debug("Image data is size %s" % (data.shape,))
     if group[0].idx.slice == 0:
         np.save(debugFolder + "/" + "img.npy", data)
-
+    
+    # B1 Map calculation (Dream approach)
+    if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
+        dream = prot_arrays['dream']
+        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
+        
+        process_raw.imagesets[group[0].idx.contrast] = data.copy()
+        full_set_check = all(elem is not None for elem in process_raw.imagesets)
+        if full_set_check:
+            logging.info("B1 map calculation using Dream")
+            ste = np.asarray(process_raw.imagesets[int(dream[0])])
+            fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])])
+            
+            if dream.size > 1 :
+                logging.info("Global filter approach")
+                # Blurring compensation parameters
+                tr = dream[1]        # [s]
+                alpha = dream[2]     # preparation FA
+                beta = dream[3]      # readout FA
+                dummies = dream[4]   # number of dummy scans before readout echo train starts
+                # T1 estimate:
+                t1 = dream[5]        # [s] - approximately Gufi Phantom at 7T
+                # TI estimate (the time after DREAM preparation after which each k-space line is acquired):
+                logging.debug("Nintlvs = %s" % (metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1))
+                ti = np.zeros([metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1, metadata.encoding[0].encodedSpace.matrixSize.z])
+                for i,acq in enumerate(group):
+                    ti[acq.idx.kspace_encode_step_1, acq.idx.kspace_encode_step_2] = i
+                ti = tr * (dummies + ti) # [s]
+                np.save(debugFolder + "/" + "ti.npy", ti)
+                # Global filter:
+                mean_alpha = calc_fa(ste.mean(), fid.mean())
+                mean_beta = mean_alpha / alpha * beta
+                filt = DREAM_filter_fid(mean_alpha, mean_beta, tr, t1, ti)
+                # apply filter:
+                filt = np.moveaxis(filt,0,1) # first kz steps then interleaves
+                while np.ndim(filt) < np.ndim(data_fid):
+                    filt = filt[..., np.newaxis]
+                # multiply with filter
+                for kz in range(filt.shape[0]):
+                    for Nint in range(filt.shape[1]):
+                        weight = filt[kz][Nint]
+                        data_fid[kz,:,Nint,:] *= weight
+                # reco of fid:
+                if sensmaps is None:
+                    # bart nufft
+                    fid = bart(1, nufft_config, trj, data_fid) # nufft
+                    # Sum of squares coil combination
+                    fid = np.sqrt(np.sum(np.abs(fid)**2, axis=-1))
+                else:
+                    fid = bart(1, pics_config , trj, data_fid, sensmaps)
+                    fid = np.abs(fid)
+                    # make sure that data is at least 3d:
+                    while np.ndim(fid) < 3:
+                        fid = fid[..., np.newaxis]         
+                if nz > rNz:
+                    # remove oversampling in slice direction
+                    fid = fid[:,:,(nz - rNz)//2:-(nz - rNz)//2]
+                np.save(debugFolder + "/" + "fid_filt.npy", fid)
+                # fa map:
+                fa_map = calc_fa(abs(ste), abs(fid))
+            
+            else:
+                fa_map = calc_fa(ste, fid)
+            
+            np.save(debugFolder + "/" + "fa.npy", fa_map)
+            fa_map = np.around(fa_map)
+            fa_map = fa_map.astype(np.int16)
+            logging.debug("fa map is size %s" % (fa_map.shape,))
+            process_raw.imagesets = [None] * n_contr # free list
+        else:
+            fa_map = None
+    else:
+        logging.info("no dream B1 mapping")
+        fa_map = None
+    
     # Normalize and convert to int16
     # save one scaling in 'static' variable
-    try:
-        process_raw.imascale
-    except:
-        process_raw.imascale = 0.8 / data.max()
-    data *= 32767 * process_raw.imascale
-    data = np.around(data)
-    data = data.astype(np.int16)
+    # try:
+    #     process_raw.imascale
+    # except:
+    #     process_raw.imascale = 0.8 / data.max()
+    # data *= 32767 * process_raw.imascale
+    # data = np.around(data)
+    # data = data.astype(np.int16)
 
     # Set ISMRMRD Meta Attributes
     meta = ismrmrd.Meta({'DataRole':               'Image',
