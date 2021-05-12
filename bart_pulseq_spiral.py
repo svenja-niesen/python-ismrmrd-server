@@ -89,7 +89,7 @@ def process_spiral(connection, config, metadata):
 
     # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
-    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
 
     acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
@@ -294,7 +294,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     # B1 Map calculation (Dream approach)
     if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
         dream = prot_arrays['dream']
-        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
+        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
         
         process_raw.imagesets[group[0].idx.contrast] = data.copy()
         full_set_check = all(elem is not None for elem in process_raw.imagesets)
