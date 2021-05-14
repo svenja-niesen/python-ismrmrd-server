@@ -151,9 +151,9 @@ def process_spiral(connection, config, metadata):
                     sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
                     if acsGroup.count([]) != 0 and sensmaps[item.idx.slice] is not None:
                         if n_slc % 2 == 0:
-                            sensmaps[item.idx.slice - 1] = sensmaps[item.idx.slice]
+                            sensmaps[item.idx.slice - 1] = sensmaps[item.idx.slice].copy()
                         elif (n_slc % 2 != 0) and (item.idx.slice != n_slc - 1):
-                            sensmaps[item.idx.slice + 1] = sensmaps[item.idx.slice]
+                            sensmaps[item.idx.slice + 1] = sensmaps[item.idx.slice].copy()
                     else:
                         acsGroup[item.idx.slice].clear()
 
