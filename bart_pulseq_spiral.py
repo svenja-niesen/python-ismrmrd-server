@@ -9,7 +9,7 @@ import base64
 from bart import bart
 from cfft import cfftn, cifftn
 from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
-from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os
+from reco_helper import calculate_prewhitening, apply_prewhitening, calc_rotmat, pcs_to_gcs, fov_shift_spiral, fov_shift, remove_os, intp_axis
 from DreamMap import DREAM_filter_fid, calc_fa
 
 """ Reconstruction of imaging data acquired with the Pulseq Sequence via the FIRE framework
@@ -89,7 +89,7 @@ def process_spiral(connection, config, metadata):
 
     # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
-    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
 
     acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
@@ -97,6 +97,7 @@ def process_spiral(connection, config, metadata):
 
     acsGroup = [[] for _ in range(n_slc)]
     sensmaps = [None] * n_slc
+    old_grid = []
     dmtx = None
     base_trj_ = []
     
@@ -145,18 +146,23 @@ def process_spiral(connection, config, metadata):
                     continue
                 elif item.is_flag_set(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION):
                     acsGroup[item.idx.slice].append(item)
-                    continue
-                elif sensmaps[item.idx.slice] is None:
-                    # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
-                    sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
-                    if acsGroup.count([]) != 0 and sensmaps[item.idx.slice] is not None:
-                        if n_slc % 2 == 0:
-                            sensmaps[item.idx.slice - 1] = sensmaps[item.idx.slice].copy()
-                        elif (n_slc % 2 != 0) and (item.idx.slice != n_slc - 1):
-                            sensmaps[item.idx.slice + 1] = sensmaps[item.idx.slice].copy()
-                    else:
+                    if item.is_flag_set(ismrmrd.ACQ_LAST_IN_SLICE):
+                        sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
+                        old_grid.append(item.idx.slice)
                         acsGroup[item.idx.slice].clear()
-
+                    continue
+                
+                #elif sensmaps[item.idx.slice] is None:
+                    # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
+                    #sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
+                
+                if ([elem for elem in sensmaps if type(elem) is not np.ndarray].count(None)!=len(sensmaps)) and ([elem for elem in sensmaps if type(elem) is not np.ndarray].count(None)!=0): # wenn sensmaps elemente enthält, aber auch None, dann interpoliere. Geht nur beim ersten imaging acquisition rein, da danach die sensmaps gefüllt sein sollten
+                    data = np.asarray([elem for elem in sensmaps if type(elem) is np.ndarray]) # sensmaps ohne die None elemente und als Array -> ist data Parameter
+                    new_grid = np.arange(0,n_slc)
+                    sensmaps = intp_axis(newgrid=new_grid, oldgrid=np.asarray(old_grid), data=data, axis=0) # Ergebnis als numpy array
+                    sensmaps = list(sensmaps) # umwandlung zurück in liste sensmaps[slices] für if bedingung
+                    old_grid.clear()
+                    
                 if item.idx.segment == 0:
                     acqGroup[item.idx.contrast][item.idx.slice].append(item)
                 else:
@@ -294,7 +300,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     # B1 Map calculation (Dream approach)
     if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
         dream = prot_arrays['dream']
-        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
+        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
         
         process_raw.imagesets[group[0].idx.contrast] = data.copy()
         full_set_check = all(elem is not None for elem in process_raw.imagesets)
