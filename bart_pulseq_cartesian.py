@@ -31,7 +31,7 @@ def process_cartesian(connection, config, metadata):
         # logging.info("Metadata: \n%s", metadata.serialize())
 
         logging.info("Incoming dataset contains %d encodings", len(metadata.encoding))
-        logging.info("First encoding is of type '%s', with a field of view of (%s x %s x %s)mm^3 and a matrix size of (%s x %s x %s)", 
+        logging.info("First encoding is of type '%s', with a matrix size of (%s x %s x %s) and a field of view of (%s x %s x %s)mm^3", 
             metadata.encoding[0].trajectory, 
             metadata.encoding[0].encodedSpace.matrixSize.x, 
             metadata.encoding[0].encodedSpace.matrixSize.y, 
@@ -62,6 +62,23 @@ def process_cartesian(connection, config, metadata):
     # Insert protocol header
     prot_file = protFolder + "/" + prot_filename
     insert_hdr(prot_file, metadata)
+    
+    try:
+        # logging.info("Metadata: \n%s", metadata.toxml('utf-8'))
+        # logging.info("Metadata: \n%s", metadata.serialize())
+
+        logging.info("new dataset contains %d encodings", len(metadata.encoding))
+        logging.info("new encoding is of type '%s', with a matrix size of (%s x %s x %s) and a field of view of (%s x %s x %s)mm^3", 
+            metadata.encoding[0].trajectory, 
+            metadata.encoding[0].encodedSpace.matrixSize.x, 
+            metadata.encoding[0].encodedSpace.matrixSize.y, 
+            metadata.encoding[0].encodedSpace.matrixSize.z, 
+            metadata.encoding[0].encodedSpace.fieldOfView_mm.x, 
+            metadata.encoding[0].encodedSpace.fieldOfView_mm.y, 
+            metadata.encoding[0].encodedSpace.fieldOfView_mm.z)
+
+    except:
+        logging.info("Improperly formatted metadata: \n%s", metadata)
 
     # Continuously parse incoming data parsed from MRD messages
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
@@ -81,6 +98,7 @@ def process_cartesian(connection, config, metadata):
     # for B1 Dream map
     if "dream" in prot_arrays:
         process_raw.imagesets = [None] * n_contr
+        process_raw.fid_unfiltered = True
     
     # different contrasts need different scaling
     process_raw.imascale = [None] * 256
@@ -299,7 +317,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
     if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
         dream = prot_arrays['dream']
         n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
-    
+        
         process_raw.imagesets[group[0].idx.contrast] = data.copy()
         full_set_check = all(elem is not None for elem in process_raw.imagesets)
         if full_set_check:
@@ -309,6 +327,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             
             if dream.size > 1 :
                 logging.info("Global filter approach")
+                # save unfiltered fid if wanted
+                if process_raw.fid_unfiltered:
+                    logging.debug("fid_unfiltered to scanner")
+                    fid_unfilt = fid.copy()
+                else:
+                    fid_unfilt = None
                 # move from [nx,ny,nz] to [ny,nz,nx]
                 ste = np.transpose(ste,[1,2,0])
                 fid = np.transpose(fid,[1,2,0])
@@ -327,8 +351,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
                 ti = tr * (dummies + ti) # [s]
                 np.save(debugFolder + "/" + "ti.npy", ti)
                 # Global filter:
-                fa_map = global_filter(ste, fid, ti, alpha, beta, tr, t1)
+                fa_map,fid_filt = global_filter(ste, fid, ti, alpha, beta, tr, t1)
                 fa_map = np.transpose(fa_map, [2,0,1])
+                # fid = fid_filt:
+                fid_filt = np.transpose(fid_filt, [2,0,1])
+                np.save(debugFolder + "/" + "fid_filt.npy", fid_filt)
+                data = fid_filt.copy()
             else:
                 fa_map = calc_fa(ste, fid)
             
@@ -339,8 +367,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             process_raw.imagesets = [None] * n_contr # free list
         else:
             fa_map = None
+            fid_unfilt = None
     else:
         fa_map = None
+        fid_unfilt = None
         logging.info("no dream B1 mapping")
 
     # Normalize and convert to int16
@@ -370,7 +400,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par].T, acquisition=group[0])
-            image.image_index = 1 + group[0].idx.contrast * n_slc + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_par + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
@@ -379,11 +409,21 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
         if fa_map is not None:
             for par in range(n_par):
                 image = ismrmrd.Image.from_array(fa_map[...,par].T, acquisition=group[0])
-                image.image_index = 1 + group[0].idx.contrast * n_slc + par
-                image.image_series_index = 1 + group[0].idx.repetition + 1
+                image.image_index = 1 + par
+                image.image_series_index = 2 + group[0].idx.repetition
                 image.slice = 0
                 image.attribute_string = xml
                 images.append(image)
+        
+        if fid_unfilt is not None:
+            for par in range(n_par):
+                image = ismrmrd.Image.from_array(fa_map[...,par].T, acquisition=group[0])
+                image.image_index = 1 + par
+                image.image_series_index = 3 + group[0].idx.repetition
+                image.slice = 0
+                image.attribute_string = xml
+                images.append(image)
+        
     else:
         image = ismrmrd.Image.from_array(data[...,0].T, acquisition=group[0])
         image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
@@ -395,7 +435,15 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
         if fa_map is not None:
             image = ismrmrd.Image.from_array(fa_map[...,0].T, acquisition=group[0])
             image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice
-            image.image_series_index = 1 + group[0].idx.repetition + 1
+            image.image_series_index = 2 + group[0].idx.repetition
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+        
+        if fid_unfilt is not None:
+            image = ismrmrd.Image.from_array(fa_map[...,0].T, acquisition=group[0])
+            image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice
+            image.image_series_index = 3 + group[0].idx.repetition
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
