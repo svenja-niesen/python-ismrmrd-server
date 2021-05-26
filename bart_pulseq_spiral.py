@@ -89,7 +89,7 @@ def process_spiral(connection, config, metadata):
 
     # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
-    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
+    n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
 
     acqGroup = [[[] for _ in range(n_slc)] for _ in range(n_contr)]
     noiseGroup = []
@@ -107,7 +107,10 @@ def process_spiral(connection, config, metadata):
     # for B1 Dream map
     if "dream" in prot_arrays:
         process_raw.imagesets = [None] * n_contr
-
+    
+    # different contrasts need different scaling
+    process_raw.imascale = [None] * 256
+    
     try:
         for acq_ctr, item in enumerate(connection):
 
@@ -151,17 +154,28 @@ def process_spiral(connection, config, metadata):
                         old_grid.append(item.idx.slice)
                         acsGroup[item.idx.slice].clear()
                     continue
-                
-                #elif sensmaps[item.idx.slice] is None:
-                    # run parallel imaging calibration (after last calibration scan is acquired/before first imaging scan)
-                    #sensmaps[item.idx.slice] = process_acs(acsGroup[item.idx.slice], config, metadata, dmtx, gpu)
-                
+                    
                 if ([elem for elem in sensmaps if type(elem) is not np.ndarray].count(None)!=len(sensmaps)) and ([elem for elem in sensmaps if type(elem) is not np.ndarray].count(None)!=0): # wenn sensmaps elemente enthält, aber auch None, dann interpoliere. Geht nur beim ersten imaging acquisition rein, da danach die sensmaps gefüllt sein sollten
-                    data = np.asarray([elem for elem in sensmaps if type(elem) is np.ndarray]) # sensmaps ohne die None elemente und als Array -> ist data Parameter
-                    new_grid = np.arange(0,n_slc)
-                    sensmaps = intp_axis(newgrid=new_grid, oldgrid=np.asarray(old_grid), data=data, axis=0) # Ergebnis als numpy array
-                    sensmaps = list(sensmaps) # umwandlung zurück in liste sensmaps[slices] für if bedingung
-                    old_grid.clear()
+                    logging.info("Interpolation of sensitivity maps")
+                    
+                    if (n_slc % 2 == 0):
+                        logging.debug("begin with odd slices")
+                        for i in range(0,n_slc-1,2):
+                            sensmaps[i] = sensmaps[i+1].copy()
+                    else:
+                        for i in range(1,n_slc,2):
+                            sensmaps[i] = sensmaps[i-1].copy()
+                    np.save(debugFolder + "/" + "sensmaps_copy.npy", sensmaps)
+                    
+                    # data = np.asarray([elem for elem in sensmaps if type(elem) is np.ndarray]) # sensmaps ohne die None elemente und als Array -> ist data Parameter
+                    # np.save(debugFolder + "/" + "sensmaps_old.npy", data)
+                    # new_grid = np.arange(0,n_slc)
+                    # sensmaps = intp_axis(newgrid=new_grid, oldgrid=np.asarray(old_grid), data=data, axis=0) # Ergebnis als numpy array
+                    # np.save(debugFolder + "/" + "sensmaps_new.npy", sensmaps)
+                    # sensmaps = list(sensmaps) # umwandlung zurück in liste sensmaps[slices] für if bedingung
+                    # old_grid.clear()
+                    
+                    
                     
                 if item.idx.segment == 0:
                     acqGroup[item.idx.contrast][item.idx.slice].append(item)
@@ -298,85 +312,91 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
         np.save(debugFolder + "/" + "img.npy", data)
     
     # B1 Map calculation (Dream approach)
-    if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
-        dream = prot_arrays['dream']
-        n_contr = metadata.encoding[0].encodingLimits.contrast.maximum #+ 1
+    # if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
+    #     dream = prot_arrays['dream']
+    #     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
         
-        process_raw.imagesets[group[0].idx.contrast] = data.copy()
-        full_set_check = all(elem is not None for elem in process_raw.imagesets)
-        if full_set_check:
-            logging.info("B1 map calculation using Dream")
-            ste = np.asarray(process_raw.imagesets[int(dream[0])])
-            fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])])
+    #     process_raw.imagesets[group[0].idx.contrast] = data.copy()
+    #     full_set_check = all(elem is not None for elem in process_raw.imagesets)
+    #     if full_set_check:
+    #         logging.info("B1 map calculation using Dream")
+    #         ste = np.asarray(process_raw.imagesets[int(dream[0])])
+    #         fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])])
             
-            if dream.size > 1 :
-                logging.info("Global filter approach")
-                # Blurring compensation parameters
-                tr = dream[1]        # [s]
-                alpha = dream[2]     # preparation FA
-                beta = dream[3]      # readout FA
-                dummies = dream[4]   # number of dummy scans before readout echo train starts
-                # T1 estimate:
-                t1 = dream[5]        # [s] - approximately Gufi Phantom at 7T
-                # TI estimate (the time after DREAM preparation after which each k-space line is acquired):
-                ti = np.zeros([metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1, metadata.encoding[0].encodedSpace.matrixSize.z])
-                for i,acq in enumerate(group):
-                    ti[acq.idx.kspace_encode_step_1, acq.idx.kspace_encode_step_2] = i
-                ti = tr * (dummies + ti) # [s]
-                np.save(debugFolder + "/" + "ti.npy", ti)
-                # Global filter:
-                mean_alpha = calc_fa(ste.mean(), fid.mean())
-                mean_beta = mean_alpha / alpha * beta
-                filt = DREAM_filter_fid(mean_alpha, mean_beta, tr, t1, ti)
-                # apply filter:
-                filt = np.moveaxis(filt,0,1) # first kz steps then interleaves
-                while np.ndim(filt) < np.ndim(data_fid):
-                    filt = filt[..., np.newaxis]
-                # multiply with filter
-                for kz in range(filt.shape[0]):
-                    for Nint in range(filt.shape[1]):
-                        weight = filt[kz][Nint]
-                        data_fid[kz,:,Nint,:] *= weight
-                # reco of fid:
-                if sensmaps is None:
-                    # bart nufft
-                    fid = bart(1, nufft_config, trj, data_fid) # nufft
-                    # Sum of squares coil combination
-                    fid = np.sqrt(np.sum(np.abs(fid)**2, axis=-1))
-                else:
-                    fid = bart(1, pics_config , trj, data_fid, sensmaps)
-                    fid = np.abs(fid)
-                    # make sure that data is at least 3d:
-                    while np.ndim(fid) < 3:
-                        fid = fid[..., np.newaxis]         
-                if nz > rNz:
-                    # remove oversampling in slice direction
-                    fid = fid[:,:,(nz - rNz)//2:-(nz - rNz)//2]
-                np.save(debugFolder + "/" + "fid_filt.npy", fid)
-                # fa map:
-                fa_map = calc_fa(abs(ste), abs(fid))
+    #         if dream.size > 1 :
+    #             logging.info("Global filter approach")
+    #             # Blurring compensation parameters
+    #             tr = dream[1]        # [s]
+    #             alpha = dream[2]     # preparation FA
+    #             beta = dream[3]      # readout FA
+    #             dummies = dream[4]   # number of dummy scans before readout echo train starts
+    #             # T1 estimate:
+    #             t1 = dream[5]        # [s] - approximately Gufi Phantom at 7T
+    #             # TI estimate (the time after DREAM preparation after which each k-space line is acquired):
+    #             ti = np.zeros([metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum + 1, metadata.encoding[0].encodedSpace.matrixSize.z])
+    #             for i,acq in enumerate(group):
+    #                 ti[acq.idx.kspace_encode_step_1, acq.idx.kspace_encode_step_2] = i
+    #             ti = tr * (dummies + ti) # [s]
+    #             np.save(debugFolder + "/" + "ti.npy", ti)
+    #             # Global filter:
+    #             mean_alpha = calc_fa(ste.mean(), fid.mean())
+    #             mean_beta = mean_alpha / alpha * beta
+    #             filt = DREAM_filter_fid(mean_alpha, mean_beta, tr, t1, ti)
+    #             # apply filter:
+    #             filt = np.moveaxis(filt,0,1) # first kz steps then interleaves
+    #             while np.ndim(filt) < np.ndim(data_fid):
+    #                 filt = filt[..., np.newaxis]
+    #             # multiply with filter
+    #             for kz in range(filt.shape[0]):
+    #                 for Nint in range(filt.shape[1]):
+    #                     weight = filt[kz][Nint]
+    #                     data_fid[kz,:,Nint,:] *= weight
+    #             # reco of fid:
+    #             if sensmaps is None:
+    #                 # bart nufft
+    #                 fid = bart(1, nufft_config, trj, data_fid) # nufft
+    #                 # Sum of squares coil combination
+    #                 fid = np.sqrt(np.sum(np.abs(fid)**2, axis=-1))
+    #             else:
+    #                 fid = bart(1, pics_config , trj, data_fid, sensmaps)
+    #                 fid = np.abs(fid)
+    #                 # make sure that data is at least 3d:
+    #                 while np.ndim(fid) < 3:
+    #                     fid = fid[..., np.newaxis]         
+    #             if nz > rNz:
+    #                 # remove oversampling in slice direction
+    #                 fid = fid[:,:,(nz - rNz)//2:-(nz - rNz)//2]
+    #             np.save(debugFolder + "/" + "fid_filt.npy", fid)
+    #             # fa map:
+    #             fa_map = calc_fa(abs(ste), abs(fid))
             
-            else:
-                fa_map = calc_fa(ste, fid)
+    #         else:
+    #             fa_map = calc_fa(ste, fid)
             
-            np.save(debugFolder + "/" + "fa.npy", fa_map)
-            fa_map = np.around(fa_map)
-            fa_map = fa_map.astype(np.int16)
-            logging.debug("fa map is size %s" % (fa_map.shape,))
-            process_raw.imagesets = [None] * n_contr # free list
-        else:
-            fa_map = None
-    else:
-        logging.info("no dream B1 mapping")
-        fa_map = None
+    #         np.save(debugFolder + "/" + "fa.npy", fa_map)
+    #         fa_map = np.around(fa_map)
+    #         fa_map = fa_map.astype(np.int16)
+    #         logging.debug("fa map is size %s" % (fa_map.shape,))
+    #         process_raw.imagesets = [None] * n_contr # free list
+    #     else:
+    #         fa_map = None
+    # else:
+    #     logging.info("no dream B1 mapping")
+    #     fa_map = None
     
     # Normalize and convert to int16
-    # save one scaling in 'static' variable
+    #save one scaling in 'static' variable
     # try:
     #     process_raw.imascale
     # except:
     #     process_raw.imascale = 0.8 / data.max()
     # data *= 32767 * process_raw.imascale
+    # data = np.around(data)
+    # data = data.astype(np.int16)
+    # contr = group[0].idx.contrast
+    # if process_raw.imascale[contr] is None:
+    #     process_raw.imascale[contr] = 0.8 / data.max()
+    # data *= 32767 * process_raw.imascale[contr]
     # data = np.around(data)
     # data = data.astype(np.int16)
 
@@ -391,12 +411,13 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     n_par = data.shape[-1]
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
-
+    logging.debug("n_slc= %s" % (n_slc))
+    
     # Format as ISMRMRD image data - WIP: something goes wrong here with indexes
     if n_par > 1:
         for par in range(n_par):
             image = ismrmrd.Image.from_array(data[...,par], acquisition=group[0])
-            image.image_index = 1 + group[0].idx.contrast * n_slc + par # contains image index (slices/partitions)
+            image.image_index = 1 + group[0].idx.contrast * n_par + par # contains image index (slices/partitions)
             image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
             image.slice = 0
             image.attribute_string = xml
@@ -404,6 +425,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     else:
         image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
         image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
+        logging.debug("image.image_index= %s" % (image.image_index))
         image.image_series_index = 1 + group[0].idx.repetition # contains image series index, e.g. different contrasts
         image.slice = 0
         image.attribute_string = xml
