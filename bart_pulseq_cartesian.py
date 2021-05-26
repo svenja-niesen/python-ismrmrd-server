@@ -15,6 +15,9 @@ from reco_helper import calculate_prewhitening, apply_prewhitening, fov_shift, c
 from pulseq_prot import insert_hdr, insert_acq, get_ismrmrd_arrays
 from DreamMap import global_filter, calc_fa
 
+from skimage import filters
+import scipy
+
 # Folder for sharing data/debugging
 shareFolder = "/tmp/share"
 debugFolder = os.path.join(shareFolder, "debug")
@@ -325,12 +328,24 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             ste = np.asarray(process_raw.imagesets[int(dream[0])])
             fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])])
             
+            #image processing filter
+            dil = np.zeros(fid.shape)
+            for nz in range(fid.shape[-1]):
+                # otsu
+                val = filters.threshold_otsu(fid[:,:,nz])
+                otsu = fid[:,:,nz] > val
+                # fill holes
+                imfill = scipy.ndimage.morphology.binary_fill_holes(otsu) * 1
+                # dilation
+                dil[:,:,nz] = scipy.ndimage.morphology.binary_dilation(imfill)
+            
             if dream.size > 1 :
                 logging.info("Global filter approach")
                 # save unfiltered fid if wanted
                 if process_raw.fid_unfiltered:
                     logging.debug("fid_unfiltered to scanner")
                     fid_unfilt = fid.copy()
+                    np.save(debugFolder + "/" + "fid_unf.npy", fid_unfilt)
                 else:
                     fid_unfilt = None
                 # move from [nx,ny,nz] to [ny,nz,nx]
@@ -360,17 +375,29 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             else:
                 fa_map = calc_fa(ste, fid)
             
-            np.save(debugFolder + "/" + "fa.npy", fa_map)
+            fa_map *= dil
+            # ref_volt = current_refvolt * (nom_fa/fa_map) NB: current_refvolt noch zu bestimmen, nom_fa aus "dream" array -> auf 2.Stelle setzen
+            ref_volt = None
+            
             fa_map = np.around(fa_map)
             fa_map = fa_map.astype(np.int16)
+            np.save(debugFolder + "/" + "fa.npy", fa_map)
             logging.debug("fa map is size %s" % (fa_map.shape,))
+            
+            # ref_volt = np.around(ref_volt)
+            # ref_volt = ref_volt.astype(np.int16)
+            # np.save(debugFolder + "/" + "ref_volt.npy", ref_volt)
+            # logging.debug("ref_volt map is size %s" % (ref_volt.shape,))
+            
             process_raw.imagesets = [None] * n_contr # free list
         else:
             fa_map = None
             fid_unfilt = None
+            ref_volt = None
     else:
         fa_map = None
         fid_unfilt = None
+        ref_volt = None
         logging.info("no dream B1 mapping")
 
     # Normalize and convert to int16
@@ -395,6 +422,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
     # Format as ISMRMRD image data
     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
+    
     n_par = data.shape[-1]
     images = []
     if n_par > 1:
@@ -424,6 +452,15 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
                 image.attribute_string = xml
                 images.append(image)
         
+        if ref_volt is not None:
+            for par in range(n_par):
+                image = ismrmrd.Image.from_array(fa_map[...,par].T, acquisition=group[0])
+                image.image_index = 1 + par
+                image.image_series_index = 4 + group[0].idx.repetition
+                image.slice = 0
+                image.attribute_string = xml
+                images.append(image)
+        
     else:
         image = ismrmrd.Image.from_array(data[...,0].T, acquisition=group[0])
         image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
@@ -447,6 +484,15 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
+        
+        if ref_volt is not None:
+            image = ismrmrd.Image.from_array(fa_map[...,0].T, acquisition=group[0])
+            image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice
+            image.image_series_index = 4 + group[0].idx.repetition
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+
 
     logging.debug("Image MetaAttributes: %s", xml)
     logging.debug("Image data has size %d and %d slices"%(images[0].data.size, len(images)))
