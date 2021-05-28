@@ -89,7 +89,7 @@ def process_spiral(connection, config, metadata):
 
     except:
         logging.info("Improperly formatted metadata: \n%s", metadata)
-
+    
     # # Initialize lists for datasets
     n_slc = metadata.encoding[0].encodingLimits.slice.maximum + 1
     n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
@@ -267,9 +267,9 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     np.save(debugFolder + "/" + "raw.npy", data)
     
     if 'dream' in prot_arrays :
-        if prot_arrays['dream'].size > 1 :
+        if prot_arrays['dream'].size > 2 :
             logging.info("fid_filt avtivated")
-            data_fid = data # for b1 filter
+            data_fid = data.copy() # for b1 filter
     
     # if sensmaps is None: # assume that this is a fully sampled scan (wip: only use autocalibration region in center k-space)
         # sensmaps = bart(1, 'ecalib -m 1 -I ', data)  # ESPIRiT calibration
@@ -316,7 +316,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
         np.save(debugFolder + "/" + "img.npy", data)
     
     # B1 Map calculation (Dream approach)
-    if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
+    if 'dream' in prot_arrays: #dream = ([ste_contr,flip_angle_ste,TR,flip_angle,prepscans,t1])
         dream = prot_arrays['dream']
         n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
         
@@ -338,7 +338,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 # dilation
                 dil[:,:,nz] = scipy.ndimage.morphology.binary_dilation(imfill)
             
-            if dream.size > 1 :
+            if dream.size > 2 :                           # without filter: dream = ([ste_contr,flip_angle_ste])
                 logging.info("Global filter approach")
                 
                 # save unfiltered fid if wanted
@@ -350,8 +350,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                     fid_unfilt = None
                 
                 # Blurring compensation parameters
-                tr = dream[1]        # [s]
-                alpha = dream[2]     # preparation FA
+                alpha = dream[1]     # preparation FA
+                tr = dream[2]        # [s]
                 beta = dream[3]      # readout FA
                 dummies = dream[4]   # number of dummy scans before readout echo train starts
                 # T1 estimate:
@@ -396,22 +396,24 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 np.save(debugFolder + "/" + "fid_filt.npy", fid)
                 data = fid.copy()
             else:
-                fa_map = calc_fa(ste, fid)
+                fa_map = calc_fa(abs(ste), abs(fid))
                 fid_unfilt = None
             
             fa_map *= dil
-            # ref_volt = current_refvolt * (nom_fa/fa_map) NB: current_refvolt noch zu bestimmen, nom_fa aus "dream" array -> auf 2.Stelle setzen
-            ref_volt = None
+            current_refvolt = metadata.userParameters.userParameterDouble[5].value_
+            nom_fa = dream[1]
+            logging.info("current_refvolt = %sV und nom_fa = %s°^" % (current_refvolt, nom_fa))
+            ref_volt = current_refvolt * (nom_fa/fa_map)
             
             np.save(debugFolder + "/" + "fa.npy", fa_map)
             fa_map = np.around(fa_map)
             fa_map = fa_map.astype(np.int16)
             logging.debug("fa map is size %s" % (fa_map.shape,))
             
-            # ref_volt = np.around(ref_volt)
-            # ref_volt = ref_volt.astype(np.int16)
-            # np.save(debugFolder + "/" + "ref_volt.npy", ref_volt)
-            # logging.debug("ref_volt map is size %s" % (ref_volt.shape,))
+            ref_volt = np.around(ref_volt)
+            ref_volt = ref_volt.astype(np.int16)
+            np.save(debugFolder + "/" + "ref_volt.npy", ref_volt)
+            logging.debug("ref_volt map is size %s" % (ref_volt.shape,))
             
             process_raw.imagesets = [None] * n_contr # free list
         else:
@@ -427,12 +429,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     # Normalize and convert to int16
     #save one scaling in 'static' variable
     
-    contr = group[0].idx.contrast
-    if process_raw.imascale[contr] is None:
-        process_raw.imascale[contr] = 0.8 / data.max()
-    data *= 32767 * process_raw.imascale[contr]
-    data = np.around(data)
-    data = data.astype(np.int16)
+    # contr = group[0].idx.contrast
+    # if process_raw.imascale[contr] is None:
+    #     process_raw.imascale[contr] = 0.8 / data.max()
+    # data *= 32767 * process_raw.imascale[contr]
+    # data = np.around(data)
+    # data = data.astype(np.int16)
 
     # Set ISMRMRD Meta Attributes
     meta = ismrmrd.Meta({'DataRole':               'Image',

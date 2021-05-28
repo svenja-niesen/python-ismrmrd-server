@@ -154,7 +154,7 @@ def global_filter(ste, fid, ti, alpha=60, beta=6, tr=3e-3, t1=2., blur_read=Fals
         ste = applyFilter(ste, filt_ro, axes=[2])
 
     # filter fid in k-space
-    return calc_fa(abs(ste), abs(fid))
+    return calc_fa(abs(ste), abs(fid)), abs(fid)
 
 # def local_filter(ste, fid, ti, alpha=60, beta=6, tr=3e-3, t1=2., blur_read=False, fmap=None, nbins=40, niter=2, store_iter = False):
 

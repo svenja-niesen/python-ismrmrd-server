@@ -317,7 +317,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
     logging.debug("Image data is size %s" % (data.shape,))
     
     # B1 Map calculation (Dream approach)
-    if 'dream' in prot_arrays: #dream = ([ste_contr,TR,flip_angle_ste,flip_angle,prepscans,t1])
+    if 'dream' in prot_arrays: #dream = ([ste_contr,flip_angle_ste,TR,flip_angle,prepscans,t1])
         dream = prot_arrays['dream']
         n_contr = metadata.encoding[0].encodingLimits.contrast.maximum + 1
         
@@ -339,8 +339,9 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
                 # dilation
                 dil[:,:,nz] = scipy.ndimage.morphology.binary_dilation(imfill)
             
-            if dream.size > 1 :
+            if dream.size > 2 :                                 # without filter: dream = ([ste_contr,flip_angle_ste])
                 logging.info("Global filter approach")
+                
                 # save unfiltered fid if wanted
                 if process_raw.fid_unfiltered:
                     logging.debug("fid_unfiltered to scanner")
@@ -353,8 +354,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
                 fid = np.transpose(fid,[1,2,0])
 
                 # Blurring compensation parameters
-                tr = dream[1]        # [s]
-                alpha = dream[2]     # preparation FA
+                alpha = dream[1]     # preparation FA
+                tr = dream[2]        # [s]
                 beta = dream[3]      # readout FA
                 dummies = dream[4]   # number of dummy scans before readout echo train starts
                 # T1 estimate:
@@ -373,21 +374,24 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, prot_arrays=N
                 np.save(debugFolder + "/" + "fid_filt.npy", fid_filt)
                 data = fid_filt.copy()
             else:
-                fa_map = calc_fa(ste, fid)
+                fa_map = calc_fa(abs(ste), abs(fid))
+                fid_unfilt = None
             
             fa_map *= dil
-            # ref_volt = current_refvolt * (nom_fa/fa_map) NB: current_refvolt noch zu bestimmen, nom_fa aus "dream" array -> auf 2.Stelle setzen
-            ref_volt = None
+            current_refvolt = metadata.userParameters.userParameterDouble[5].value_
+            nom_fa = dream[1]
+            logging.info("current_refvolt = %sV und nom_fa = %s°^" % (current_refvolt, nom_fa))
+            ref_volt = current_refvolt * (nom_fa/fa_map)
             
             fa_map = np.around(fa_map)
             fa_map = fa_map.astype(np.int16)
             np.save(debugFolder + "/" + "fa.npy", fa_map)
             logging.debug("fa map is size %s" % (fa_map.shape,))
             
-            # ref_volt = np.around(ref_volt)
-            # ref_volt = ref_volt.astype(np.int16)
-            # np.save(debugFolder + "/" + "ref_volt.npy", ref_volt)
-            # logging.debug("ref_volt map is size %s" % (ref_volt.shape,))
+            ref_volt = np.around(ref_volt)
+            ref_volt = ref_volt.astype(np.int16)
+            np.save(debugFolder + "/" + "ref_volt.npy", ref_volt)
+            logging.debug("ref_volt map is size %s" % (ref_volt.shape,))
             
             process_raw.imagesets = [None] * n_contr # free list
         else:
