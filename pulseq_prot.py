@@ -30,7 +30,7 @@ def insert_hdr(prot_file, metadata):
     #---------------------------
     # Process the header 
     #---------------------------
-
+    
     prot_hdr = ismrmrd.xsd.CreateFromDocument(prot.read_xml_header())
 
     dset_udbl = metadata.userParameters.userParameterDouble
@@ -244,6 +244,7 @@ def calc_traj(acq, hdr, ncol):
 
     grad = np.swapaxes(acq.traj[:],0,1) # [dims, samples] [T/m]
     dims = grad.shape[0]
+    
 
     fov = hdr.encoding[0].reconSpace.fieldOfView_mm.x
     rotmat = calc_rotmat(acq)
@@ -286,7 +287,7 @@ def calc_traj(acq, hdr, ncol):
     # calculate trajectory 
     pred_trj = np.cumsum(pred_grad.real, axis=1)
     base_trj = np.cumsum(grad, axis=1)
-
+    
     # set z-axis if trajectory is two-dimensional
     if dims == 2:
         nz = hdr.encoding[0].encodedSpace.matrixSize.z
@@ -298,8 +299,10 @@ def calc_traj(acq, hdr, ncol):
     gradtime += dt_grad/2 - dt_skope/2
 
     # proper scaling
-    pred_trj *= dt_grad * gammabar * (1e-3 * fov)
-    base_trj *= dt_grad * gammabar * (1e-3 * fov)
+    pred_trj[0:2] *= dt_grad * gammabar * (1e-3 * fov)
+    base_trj[0:2] *= dt_grad * gammabar * (1e-3 * fov)
+    
+    print(pred_trj[2])
 
     # align trajectory to scanner ADC
     base_trj = intp_axis(adctime, gradtime, base_trj, axis=1)
