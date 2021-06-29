@@ -302,6 +302,7 @@ def calc_traj(acq, hdr, ncol):
     pred_trj[0:2] *= dt_grad * gammabar * (1e-3 * fov)
     base_trj[0:2] *= dt_grad * gammabar * (1e-3 * fov)
     
+    #print(pred_trj[2])
     print(pred_trj[2])
 
     # align trajectory to scanner ADC

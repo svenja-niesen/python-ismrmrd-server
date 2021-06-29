@@ -100,7 +100,7 @@ def process_spiral(connection, config, metadata):
     #acsGroup = [[] for _ in range(metadata.encoding[0].encodedSpace.matrixSize.z)] # for mult_refscan
     sensmaps = [None] * n_slc
     #sensmaps = [None] * metadata.encoding[0].encodedSpace.matrixSize.z # for mult_refscan
-    #sensmaps3 = np.zeros([metadata.encoding[0].encodedSpace.matrixSize.x,metadata.encoding[0].encodedSpace.matrixSize.y,metadata.encoding[0].encodedSpace.matrixSize.z,32]) # for mult_refscan
+    #sensmaps3 = np.zeros([metadata.encoding[0].encodedSpace.matrixSize.x,metadata.encoding[0].encodedSpace.matrixSize.y,metadata.encoding[0].encodedSpace.matrixSize.z,32],dtype=complex) # for mult_refscan
     #h = None # for mult_refscan
     old_grid = []
     dmtx = None
@@ -118,7 +118,7 @@ def process_spiral(connection, config, metadata):
         process_raw.fid_unfiltered = True
     
     # different contrasts need different scaling
-    process_raw.imascale = [None] * 256
+    process_raw.imascale = [None] * n_contr
     
     try:
         for acq_ctr, item in enumerate(connection):
@@ -310,7 +310,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     else:
         nufft_config = 'nufft -i -l 0.005 -c -t -d %d:%d:%d'%(nx, nx, nz)
         ecalib_config = 'ecalib -m 1 -I -r 20 -k 6'
-        pics_config = 'pics -S -e -l1 -r 0.001 -i 50 -t'
+        pics_config = 'pics -S -e -l1 -r 0.001 -i 100 -t'
 
     force_pics = False
     if sensmaps is None and force_pics:
@@ -336,8 +336,8 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
         while np.ndim(data) < 3:
             data = data[..., np.newaxis]
     
-    if group[0].idx.slice == 0 and sensmaps is not None:
-        np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
+    # if group[0].idx.slice == 0 and sensmaps is not None:
+    #     np.save(debugFolder + "/" + "sensmaps.npy", sensmaps)
 
     if nz > rNz:
         # remove oversampling in slice direction
@@ -345,7 +345,10 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
 
     logging.debug("Image data is size %s" % (data.shape,))
     if group[0].idx.slice == 0:
-        np.save(debugFolder + "/" + "img.npy", data)
+        if group[0].idx.contrast == 0:
+            np.save(debugFolder + "/" + "img_ste.npy", data)
+        if group[0].idx.contrast == 1:
+            np.save(debugFolder + "/" + "img_fid.npy", data)
     
     # B1 Map calculation (Dream approach)
     if 'dream' in prot_arrays: #dream = ([ste_contr,flip_angle_ste,TR,flip_angle,prepscans,t1])
@@ -359,7 +362,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
             ste = np.asarray(process_raw.imagesets[int(dream[0])])
             fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])])
             
-            #image processing filter
+            # image processing filter for fa-map
             dil = np.zeros(fid.shape)
             for nz in range(fid.shape[-1]):
                 # otsu
@@ -369,6 +372,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 imfill = scipy.ndimage.morphology.binary_fill_holes(otsu) * 1
                 # dilation
                 dil[:,:,nz] = scipy.ndimage.morphology.binary_dilation(imfill)
+            np.save(debugFolder + "/" + "dil.npy", dil)
             
             if dream.size > 2 :                           # without filter: dream = ([ste_contr,flip_angle_ste])
                 logging.info("Global filter approach")
@@ -423,6 +427,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 fa_map = calc_fa(abs(ste), abs(fid))
                 fid_unfilt = None
             
+            np.save(debugFolder + "/" + "fa_unf.npy", fa_map)
             fa_map *= dil
             current_refvolt = metadata.userParameters.userParameterDouble[5].value_
             nom_fa = dream[1]
@@ -453,12 +458,12 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     # Normalize and convert to int16
     #save one scaling in 'static' variable
     
-    # contr = group[0].idx.contrast
-    # if process_raw.imascale[contr] is None:
-    #     process_raw.imascale[contr] = 0.8 / data.max()
-    # data *= 32767 * process_raw.imascale[contr]
-    # data = np.around(data)
-    # data = data.astype(np.int16)
+    contr = group[0].idx.contrast
+    if process_raw.imascale[contr] is None:
+        process_raw.imascale[contr] = 0.8 / data.max()
+    data *= 32767 * process_raw.imascale[contr]
+    data = np.around(data)
+    data = data.astype(np.int16)
 
     # Set ISMRMRD Meta Attributes
     meta = ismrmrd.Meta({'DataRole':               'Image',
@@ -562,6 +567,7 @@ def process_acs(group, config, metadata, dmtx=None, gpu=False):
         data = fov_shift(data, shift)
 
         data = np.swapaxes(data,0,1) # in Pulseq gre_refscan sequence read and phase are changed, might change this in the sequence
+        np.save(debugFolder + "/" + "data_sensm.npy", data)
         logging.debug("data.shape=%s"% (data.shape,))
         logging.debug("Referencescan: shape= %s" % (data.shape,))
         ref = fft.fftshift(data, axes=(0, 1, 2))
@@ -631,7 +637,6 @@ def sort_spiral_data(group, metadata, dmtx=None):
         shift = pcs_to_gcs(np.asarray(acq.position), rot_mat) / res
         sig[-1] = fov_shift_spiral(sig[-1], trj[-1], shift, nx)
         
-
     np.save(debugFolder + "/" + "enc.npy", enc)
     
     # convert lists to numpy arrays
@@ -648,11 +653,11 @@ def sort_spiral_data(group, metadata, dmtx=None):
     logging.debug("Trajectory shape = %s , Signal Shape = %s "%(trj.shape, sig.shape))
     
     # for kz
-    trj_kz = np.transpose(trj_kz, [0, 2, 3, 1]) # [nz, 3, ncol, nacq]
-    sig_kz = np.transpose(sig_kz, [0, 3, 1, 2])[np.newaxis] # [nz, ncol, nacq, ncha]
-    logging.debug("Trajectory kz shape = %s , Signal kz Shape = %s "%(trj_kz.shape, sig_kz.shape))
+    # trj_kz = np.transpose(trj_kz, [0, 2, 3, 1]) # [nz, 3, ncol, nacq]
+    # sig_kz = np.transpose(sig_kz, [0, 3, 1, 2])[np.newaxis] # [nz, ncol, nacq, ncha]
+    # logging.debug("Trajectory kz shape = %s , Signal kz Shape = %s "%(trj_kz.shape, sig_kz.shape))
     
-    #np.save(debugFolder + "/" + "trj.npy", trj)
+    np.save(debugFolder + "/" + "trj.npy", trj)
     
     # for kz
     np.save(debugFolder + "/" + "trj_kz.npy", trj_kz)
@@ -687,8 +692,9 @@ def sort_into_kspace(group, metadata, dmtx=None, zf_around_center=False):
     counter = np.zeros([ny, nz], dtype=np.uint16)
 
     logging.debug("nx/ny/nz: %s/%s/%s; enc1 min/max: %s/%s; enc2 min/max:%s/%s, ncol: %s" % (nx, ny, nz, enc1_min, enc1_max, enc2_min, enc2_max, group[0].data.shape[-1]))
-
+    
     for acq in group:
+        
         enc1 = acq.idx.kspace_encode_step_1
         enc2 = acq.idx.kspace_encode_step_2
 
