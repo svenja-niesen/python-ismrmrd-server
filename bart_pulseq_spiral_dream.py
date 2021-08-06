@@ -15,6 +15,7 @@ from DreamMap import calc_fa, DREAM_filter_fid
 
 from skimage import filters
 from scipy.ndimage import morphology as morph
+from b1map_helper import B0Map_complex
 
 """ Spiral subscript to reconstruct dream B1 map
 """
@@ -86,6 +87,9 @@ def process_spiral_dream(connection, config, metadata, prot_file):
     # for B1 Dream map
     process_raw.imagesets = [None] * n_contr
     process_raw.rawdata = [None] * n_contr
+    
+    # for B0 Dream map
+    process_raw.imagesets_cmplx = [None] * n_contr
     
     # different contrasts need different scaling
     process_raw.imascale = [None] * n_contr
@@ -258,6 +262,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
             data = np.sqrt(np.sum(np.abs(data)**2, axis=-1))
         else:
             data = bart(1, pics_config , trj, data, sensmaps)
+            process_raw.imagesets_cmplx[group[0].idx.contrast] = data.copy()
             data = np.abs(data)
             # make sure that data is at least 3d:
             while np.ndim(data) < 3:
@@ -319,6 +324,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 fid = np.sqrt(np.sum(np.abs(fid)**2, axis=-1))
             else:
                 fid = bart(1, pics_config , trj, fid_data, sensmaps)
+                process_raw.imagesets_cmplx[group[0].idx.contrast] = fid.copy()
                 fid = np.abs(fid)
                 # make sure that data is at least 3d:
                 while np.ndim(fid) < 3:
@@ -327,29 +333,44 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 # remove oversampling in slice direction
                 fid = fid[:,:,(nz - rNz)//2:-(nz - rNz)//2]
             # fa map:
-            fa_map = calc_fa(abs(ste), abs(fid))
             data = fid.copy()
         else:
             fid = np.asarray(process_raw.imagesets[int(n_contr-1-dream[0])]) # fid unchanged
        
-        # image processing filter for fa-map (use of filtered or unfiltered fid)
-        dil = np.zeros(fid.shape)
-        for nz in range(fid.shape[-1]):
-            # otsu
-            val = filters.threshold_otsu(fid[:,:,nz])
-            otsu = fid[:,:,nz] > val
-            # fill holes
-            imfill = morph.binary_fill_holes(otsu) * 1
-            # dilation
-            dil[:,:,nz] = morph.binary_dilation(imfill)
+        # # image processing filter for fa-map (use of filtered or unfiltered fid)
+        # dil = np.zeros(fid.shape)
+        # for nz in range(fid.shape[-1]):
+        #     # otsu
+        #     val = filters.threshold_otsu(fid[:,:,nz])
+        #     otsu = fid[:,:,nz] > val
+        #     # fill holes
+        #     imfill = morph.binary_fill_holes(otsu) * 1
+        #     # dilation
+        #     dil[:,:,nz] = morph.binary_dilation(imfill)
                 
         # fa map:
         fa_map = calc_fa(abs(ste), abs(fid))
-        fa_map *= dil
+        #fa_map *= dil
         current_refvolt = metadata.userParameters.userParameterDouble[5].value_
         nom_fa = dream[1]
         logging.info("current_refvolt = %sV and nom_fa = %s°^" % (current_refvolt, nom_fa))
         ref_volt = current_refvolt * (nom_fa/fa_map)
+        
+        # B0 map with DREAM contrasts
+        try:
+            dreamB0 = prot_arrays['dreamB0']
+            logging.info("B0 map calculation using Dream")
+            ste_cmplx = np.asarray(process_raw.imagesets_cmplx[int(dream[0])])
+            fid_cmplx = np.asarray(process_raw.imagesets_cmplx[int(n_contr-1-dream[0])])
+            B0Map = B0Map_complex(ste_cmplx, fid_cmplx, dreamB0[0])
+            
+            np.save(debugFolder + "/" + "B0Map.npy", B0Map)
+            B0Map = np.around(B0Map)
+            B0Map = B0Map.astype(np.int16)
+            logging.debug("B0 map is size %s" % (B0Map.shape,))
+        except:
+            logging.info("No B0 map calculation with the STE* timing scheme")
+            B0Map = None
         
         fa_map = np.around(fa_map)
         fa_map = fa_map.astype(np.int16)
@@ -364,6 +385,7 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
     else:
         fa_map = None
         ref_volt = None
+        B0Map = None
     
     # Normalize and convert to int16
     #save one scaling in 'static' variable
@@ -415,6 +437,15 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
                 image.attribute_string = xml
                 images.append(image)
         
+        if B0Map is not None:
+            for par in range(n_par):
+                image = ismrmrd.Image.from_array(B0Map[...,par].T, acquisition=group[0])
+                image.image_index = 1 + par
+                image.image_series_index = 4
+                image.slice = 0
+                image.attribute_string = xml
+                images.append(image)
+        
     else:
         image = ismrmrd.Image.from_array(data[...,0], acquisition=group[0])
         image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice # contains image index (slices/partitions)
@@ -436,6 +467,14 @@ def process_raw(group, config, metadata, dmtx=None, sensmaps=None, gpu=False, pr
             image = ismrmrd.Image.from_array(ref_volt[...,0].T, acquisition=group[0])
             image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice
             image.image_series_index = 3
+            image.slice = 0
+            image.attribute_string = xml
+            images.append(image)
+        
+        if B0Map is not None:
+            image = ismrmrd.Image.from_array(B0Map[...,0].T, acquisition=group[0])
+            image.image_index = 1 + group[0].idx.contrast * n_slc + group[0].idx.slice
+            image.image_series_index = 4
             image.slice = 0
             image.attribute_string = xml
             images.append(image)
@@ -510,7 +549,7 @@ def sort_spiral_data(group, metadata, dmtx=None):
     
     # readout filter to remove Gibbs ringing
     for nacq in range(sig.shape[0]):
-        sig[nacq,:,:] = filt_ksp(kspace=sig[nacq,:,:], traj=trj[nacq,:,:], filt_fac=1)
+        sig[nacq,:,:] = filt_ksp(kspace=sig[nacq,:,:], traj=trj[nacq,:,:], filt_fac=0.6)
     
     # rearrange trj & sig for bart
     trj = np.transpose(trj, [1, 2, 0]) # [3, ncol, nacq]
